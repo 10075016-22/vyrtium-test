@@ -13,10 +13,13 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "lucide-react": "^1.64.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "sonner": "^2.0.8"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -26,6 +29,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "^5.0.5",
     "jsdom": "^29.1.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"

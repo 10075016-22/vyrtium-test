@@ -1,22 +1,89 @@
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+@import 'tailwindcss';
+
+/* Dark palette based on vyrtium.com: near-black base, teal accent, cream text. */
+@theme {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --color-ink: #05090c;
+  --color-surface: #0a0d12;
+  --color-raised: #111720;
+  --color-field: #0d1117;
+  --color-skeleton: #161c24;
+  --color-cream: #fefdf1;
+  --color-muted: #98a2b3;
+  --color-placeholder: #667085;
+  --color-brand: #00c2b2;
+  --color-brand-bright: #00f0e0;
+  --color-success: #3ddc97;
+  --color-danger: #f97066;
+  --color-info: #5eead4;
+
+  --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Enter transitions: opacity and transform only, so they stay on the compositor. */
+  --animate-enter-down: enter-down 200ms ease-out;
+  --animate-fade: fade 220ms ease-out;
+  --animate-row-enter:
+    row-enter 320ms var(--ease-snappy), row-highlight 1.6s ease-out 320ms both;
+
+  @keyframes enter-down {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes row-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes row-highlight {
+    from {
+      background-color: rgb(0 194 178 / 14%);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
 }
 
-:root {
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.5;
-  color: #111827;
-  background: #f9fafb;
-}
+@layer base {
+  :root {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+  }
 
-body {
-  margin: 0;
-}
+  body {
+    min-height: 100dvh;
+    background-color: var(--color-ink);
+    background-image:
+      radial-gradient(70% 60% at -4% 108%, rgb(0 194 178 / 12%) 0%, transparent 60%),
+      radial-gradient(45% 50% at 102% 0%, rgb(160 90 30 / 8%) 0%, transparent 55%);
+    background-attachment: fixed;
+    color: var(--color-cream);
+  }
 
-.container {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 16px;
+  :focus-visible {
+    outline: 2px solid var(--color-brand-bright);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
