@@ -1,12 +1,11 @@
 import { vi } from 'vitest';
-import type { SessionUser } from '../auth/context';
+import { SESSION_STORAGE_KEY, type Session } from '../auth/session';
 
 export interface RecordedCall {
   method: string;
   path: string;
   headers: Record<string, string>;
   body: unknown;
-  credentials: RequestCredentials | undefined;
 }
 
 type Handler = (call: RecordedCall) => Response | Promise<Response>;
@@ -19,35 +18,11 @@ export function apiError(status: number, code: string, message = code): Response
   return json({ error: { code, message } }, status);
 }
 
-export const ANA_USER: SessionUser = { id: 'u_123', email: 'ana@orbita.test' };
-
-// Who the fake API sees behind the session cookie; set with storeSession().
-let cookieUser: SessionUser | null = null;
-
-/** Simulates a valid session cookie, as after a login and a page reload. */
-export function storeSession(user: SessionUser = ANA_USER): void {
-  cookieUser = user;
-}
-
-export function resetSession(): void {
-  cookieUser = null;
-}
-
-const DEFAULT_ROUTES: Record<string, Handler> = {
-  'GET /auth/me': () => (cookieUser ? json(cookieUser) : apiError(401, 'MISSING_TOKEN')),
-  'POST /auth/logout': () => {
-    cookieUser = null;
-    return new Response(null, { status: 204 });
-  },
-};
-
 /**
  * Replaces fetch with an in-memory API. Routes are keyed "METHOD /path"
- * (query string included); /auth/me and /auth/logout have cookie-aware defaults
- * a test can override. Unmatched requests fail the test loudly.
+ * (query string included). Unmatched requests fail the test loudly.
  */
-export function fakeApi(testRoutes: Record<string, Handler>) {
-  const routes = { ...DEFAULT_ROUTES, ...testRoutes };
+export function fakeApi(routes: Record<string, Handler>) {
   const calls: RecordedCall[] = [];
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -57,7 +32,6 @@ export function fakeApi(testRoutes: Record<string, Handler>) {
       path: `${url.pathname}${url.search}`,
       headers: Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>)),
       body: typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
-      credentials: init.credentials,
     };
     calls.push(call);
 
@@ -72,6 +46,16 @@ export function fakeApi(testRoutes: Record<string, Handler>) {
     callsTo: (method: string, pathPrefix: string) =>
       calls.filter((c) => c.method === method && c.path.startsWith(pathPrefix)),
   };
+}
+
+export function storeSession(overrides: Partial<Session> = {}): void {
+  const session: Session = {
+    token: 'stored-token',
+    email: 'ana@orbita.test',
+    expiresAt: Date.now() + 30 * 60_000,
+    ...overrides,
+  };
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
 export const balance = (amount: string) => ({ amount, currency: 'USD', updatedAt: '2026-10-29T12:00:00.000Z' });

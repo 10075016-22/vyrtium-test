@@ -23,8 +23,6 @@ export interface Config {
   jwtTtlSeconds: number;
   webhookSecret: string;
   corsOrigin: string;
-  /** Send the session cookie only over HTTPS. Enable in production. */
-  cookieSecure: boolean;
   idempotencyTtlHours: number;
 }
 
@@ -36,7 +34,6 @@ export function loadConfig(): Config {
     jwtTtlSeconds: integer('JWT_TTL_SECONDS', 1800),
     webhookSecret: required('WEBHOOK_SECRET'),
     corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
-    cookieSecure: process.env.COOKIE_SECURE === 'true',
     idempotencyTtlHours: integer('IDEMPOTENCY_TTL_HOURS', 24),
   };
 }

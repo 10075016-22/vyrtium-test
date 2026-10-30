@@ -23,7 +23,7 @@ const pageSchema = z.strictObject({
 
 export function balancesRouter(db: Db, config: Config): Router {
   const router = Router();
-  router.use(requireAuth(db, config));
+  router.use(requireAuth(db, config.jwtSecret));
 
   router.get('/me', (req, res) => {
     res.json(getOrCreateBalance(db, getUserId(req)));

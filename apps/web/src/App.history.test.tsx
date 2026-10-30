@@ -26,13 +26,12 @@ function historyRoutes(rows: Row[]) {
 }
 
 describe('balance screen states', () => {
-  it('shows loading placeholders before data arrives', async () => {
+  it('shows loading placeholders before data arrives', () => {
     storeSession();
-    const never = () => new Promise<Response>(() => undefined);
-    fakeApi({ 'GET /balances/me': never, 'GET /balances/me/transactions?page=1&pageSize=10': never });
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
     render(<App />);
 
-    expect(await screen.findByLabelText('Cargando saldo')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cargando saldo')).toBeInTheDocument();
     expect(screen.getByLabelText('Cargando movimientos')).toBeInTheDocument();
   });
 

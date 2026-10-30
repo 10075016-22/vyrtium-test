@@ -156,8 +156,7 @@ describe('movement form', () => {
     const [post] = api.callsTo('POST', '/balances/me/deposits');
     expect(post?.body).toEqual({ amount: '50.50', currency: 'USD' });
     expect(post?.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/);
-    expect(post?.credentials).toBe('include');
-    expect(post?.headers.Authorization).toBeUndefined();
+    expect(post?.headers.Authorization).toBe('Bearer stored-token');
   });
 
   it('goes back to page 1 after an operation and highlights the new movement', async () => {

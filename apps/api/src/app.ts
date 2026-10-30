@@ -16,8 +16,7 @@ export function createApp({ config, db }: AppDeps): Express {
   const app = express();
 
   app.disable('x-powered-by');
-  // credentials: the browser sends the session cookie only to an origin that allows it.
-  app.use(cors({ origin: config.corsOrigin, credentials: true }));
+  app.use(cors({ origin: config.corsOrigin }));
 
   // Before express.json(): the webhook needs the raw bytes to verify the HMAC.
   app.use('/webhooks', webhooksRouter(db, config));
