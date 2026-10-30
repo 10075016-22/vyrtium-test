@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import cors from 'cors';
 import { authRouter } from './auth/auth.routes.js';
+import { balancesRouter } from './balances/balances.routes.js';
 import type { Config } from './config.js';
 import type { Db } from './db/database.js';
 import { errorHandler, notFoundHandler } from './http/errors.js';
@@ -22,6 +23,7 @@ export function createApp({ config, db }: AppDeps): Express {
   });
 
   app.use('/auth', authRouter(db, config));
+  app.use('/balances', balancesRouter(db, config));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

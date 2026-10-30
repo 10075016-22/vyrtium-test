@@ -9,7 +9,14 @@ export type ErrorCode =
   | 'TOKEN_EXPIRED'
   | 'NOT_FOUND'
   | 'PAYLOAD_TOO_LARGE'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | 'INVALID_AMOUNT'
+  | 'AMOUNT_LIMIT_EXCEEDED'
+  | 'UNSUPPORTED_CURRENCY'
+  | 'INSUFFICIENT_FUNDS'
+  | 'IDEMPOTENCY_KEY_REQUIRED'
+  | 'IDEMPOTENCY_KEY_INVALID'
+  | 'IDEMPOTENCY_KEY_REUSED';
 
 export interface ErrorDetail {
   field: string;
@@ -36,7 +43,7 @@ export class AppError extends Error {
   }
 }
 
-function toBody(error: AppError): ErrorBody {
+export function toBody(error: AppError): ErrorBody {
   return {
     error: {
       code: error.code,

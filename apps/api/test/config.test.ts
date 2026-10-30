@@ -29,6 +29,7 @@ describe('loadConfig', () => {
       jwtTtlSeconds: 1800,
       databasePath: './data/orbita.db',
       corsOrigin: 'http://localhost:5173',
+      idempotencyTtlHours: 24,
     });
   });
 

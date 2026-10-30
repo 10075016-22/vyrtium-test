@@ -23,6 +23,7 @@ export interface Config {
   jwtTtlSeconds: number;
   webhookSecret: string;
   corsOrigin: string;
+  idempotencyTtlHours: number;
 }
 
 export function loadConfig(): Config {
@@ -33,5 +34,6 @@ export function loadConfig(): Config {
     jwtTtlSeconds: integer('JWT_TTL_SECONDS', 1800),
     webhookSecret: required('WEBHOOK_SECRET'),
     corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+    idempotencyTtlHours: integer('IDEMPOTENCY_TTL_HOURS', 24),
   };
 }
