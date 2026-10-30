@@ -2,10 +2,7 @@
 const AMOUNT_PATTERN = /^(0|[1-9]\d{0,8})(?:\.(\d{1,2}))?$/;
 const MAX_CENTS = 1_000_000;
 
-export type AmountError = 'empty' | 'format' | 'decimals' | 'zero' | 'over-limit';
-
-/** Errors that are definite while typing (not an intermediate state like "0."). */
-export const LIVE_AMOUNT_ERRORS: readonly AmountError[] = ['decimals', 'over-limit'];
+export type AmountError = 'empty' | 'format' | 'zero' | 'over-limit';
 
 export type AmountValidation = { ok: true; amount: string } | { ok: false; reason: AmountError; message: string };
 
@@ -16,10 +13,6 @@ export type AmountValidation = { ok: true; amount: string } | { ok: false; reaso
 export function validateAmount(input: string): AmountValidation {
   const value = input.trim();
   if (value === '') return { ok: false, reason: 'empty', message: 'Ingresa un monto.' };
-
-  if (/^\d+\.\d{3,}$/.test(value)) {
-    return { ok: false, reason: 'decimals', message: 'El monto puede tener máximo 2 decimales.' };
-  }
 
   const match = AMOUNT_PATTERN.exec(value);
   if (!match) {
@@ -43,22 +36,17 @@ export function validateAmount(input: string): AmountValidation {
 }
 
 const MAX_INTEGER_DIGITS = 5; // enough to type 10001 and get the "maximum" message
-// One digit past the allowed 2 stays visible, so "10.123" is shown and rejected
-// instead of being silently rounded into a different, valid amount.
-const MAX_FRACTION_DIGITS = 3;
 
 /**
- * Input mask for amounts: keeps digits and one decimal point, drops leading
- * zeros and groups thousands with commas. It never changes the value the user
- * meant: an extra decimal is kept so validation can reject it.
- * "1234.5" -> "1,234.5", "10.1234" -> "10.123", "abc" -> "", ".5" -> "0.5".
+ * Input mask for amounts: keeps digits and one decimal point, caps decimals
+ * at 2, drops leading zeros and groups thousands with commas.
+ * "1234.567" -> "1,234.56", "abc" -> "", ".5" -> "0.5".
  */
 export function maskAmount(input: string): string {
   const cleaned = input.replace(/[^\d.]/g, '');
   const dot = cleaned.indexOf('.');
   const rawUnits = dot === -1 ? cleaned : cleaned.slice(0, dot);
-  const fraction =
-    dot === -1 ? undefined : cleaned.slice(dot + 1).replace(/\./g, '').slice(0, MAX_FRACTION_DIGITS);
+  const fraction = dot === -1 ? undefined : cleaned.slice(dot + 1).replace(/\./g, '').slice(0, 2);
 
   let units = rawUnits.replace(/^0+(?=\d)/, '').slice(0, MAX_INTEGER_DIGITS);
   if (units === '' && fraction !== undefined) units = '0';

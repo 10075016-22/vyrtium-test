@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { AppError } from './errors.js';
 
-function parse<T extends z.ZodType>(schema: T, input: unknown, message: string, root: string): z.infer<T> {
+function parse<T extends z.ZodType>(schema: T, input: unknown, message: string): z.infer<T> {
   const result = schema.safeParse(input);
   if (!result.success) {
     throw new AppError(
@@ -9,7 +9,7 @@ function parse<T extends z.ZodType>(schema: T, input: unknown, message: string, 
       'VALIDATION_ERROR',
       message,
       result.error.issues.map((issue) => ({
-        field: issue.path.join('.') || root,
+        field: issue.path.join('.') || 'body',
         message: issue.message,
       })),
     );
@@ -18,9 +18,9 @@ function parse<T extends z.ZodType>(schema: T, input: unknown, message: string, 
 }
 
 export function parseBody<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
-  return parse(schema, body, 'Request body is invalid', 'body');
+  return parse(schema, body, 'Request body is invalid');
 }
 
 export function parseQuery<T extends z.ZodType>(schema: T, query: unknown): z.infer<T> {
-  return parse(schema, query, 'Query parameters are invalid', 'query');
+  return parse(schema, query, 'Query parameters are invalid');
 }

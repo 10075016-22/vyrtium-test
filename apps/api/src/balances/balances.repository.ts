@@ -62,7 +62,6 @@ export function insertTransaction(db: Db, userId: string, tx: TransactionRecord)
   ).run(tx.id, userId, tx.type, tx.amountCents, tx.balanceAfterCents, tx.currency, tx.createdAt);
 }
 
-/** Newest first. Ordered by seq, which is stable even when two rows share a timestamp. */
 export function listTransactions(db: Db, userId: string, limit: number, offset: number): TransactionRecord[] {
   return db
     .prepare<[string, number, number], TransactionRecord>(
@@ -74,7 +73,6 @@ export function listTransactions(db: Db, userId: string, limit: number, offset: 
     .all(userId, limit, offset);
 }
 
-/** Served by the (user_id, seq) index, so it only touches this user's entries. */
 export function countTransactions(db: Db, userId: string): number {
   return (
     db.prepare<[string], { total: number }>('SELECT COUNT(*) AS total FROM transactions WHERE user_id = ?').get(userId)

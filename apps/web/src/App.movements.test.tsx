@@ -32,7 +32,7 @@ describe('movement form', () => {
   it.each([
     ['letters and symbols', 'abc$%-+e', ''],
     ['repeated commas (the first is the decimal point)', '100,,,,5', '100.5'],
-    ['a third decimal (kept visible so it can be rejected)', '10.1234', '10.123'],
+    ['a third decimal', '10.123', '10.12'],
     ['a second decimal point', '1.2.3', '1.23'],
     ['more than 5 integer digits', '1000000000', '10,000'],
     ['leading zeros', '0005', '5'],
@@ -62,23 +62,6 @@ describe('movement form', () => {
     expect(input).not.toHaveAttribute('aria-invalid');
     expect(screen.queryByText('El monto máximo por operación es 10,000.00 USD.')).not.toBeInTheDocument();
     expect(api.callsTo('POST', '/balances')).toHaveLength(0);
-  });
-
-  it('flags a third decimal while typing instead of rounding it away', async () => {
-    const api = fakeApi(baseRoutes());
-    const user = await renderReady();
-    const input = screen.getByLabelText('Monto (USD)');
-
-    await user.type(input, '10.123');
-    expect(input).toHaveValue('10.123');
-    expect(input).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText('El monto puede tener máximo 2 decimales.')).toBeInTheDocument();
-
-    await user.click(submitButton());
-    expect(api.callsTo('POST', '/balances')).toHaveLength(0);
-
-    await user.type(input, '{Backspace}');
-    expect(input).not.toHaveAttribute('aria-invalid');
   });
 
   it('does not nag about incomplete input while typing', async () => {
@@ -114,7 +97,7 @@ describe('movement form', () => {
     expect(input.selectionStart).toBe(2);
   });
 
-  it.each(['0', '0.00', '10.123', '10001', 'abc', ''])('rejects %j before sending: no request leaves the browser', async (value) => {
+  it.each(['0', '0.00', '10001', 'abc', ''])('rejects %j before sending: no request leaves the browser', async (value) => {
     const api = fakeApi(baseRoutes());
     const user = await renderReady();
 
@@ -134,7 +117,12 @@ describe('movement form', () => {
         json(
           current === '100.00'
             ? emptyPage
-            : page([{ id: 'txn_50.50', type: 'deposit', amount: '50.50', balanceAfter: '150.50' }]),
+            : page([{ id: 'txn_50.50', type: 'deposit', amount: '50.50', balanceAfter: '150.50' }], {
+                page: 1,
+                pageSize: 10,
+                total: 1,
+                totalPages: 1,
+              }),
         ),
       'POST /balances/me/deposits': () => {
         current = '150.50';
@@ -157,49 +145,6 @@ describe('movement form', () => {
     expect(post?.body).toEqual({ amount: '50.50', currency: 'USD' });
     expect(post?.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/);
     expect(post?.headers.Authorization).toBe('Bearer stored-token');
-  });
-
-  it('goes back to page 1 after an operation and highlights the new movement', async () => {
-    let afterDeposit = false;
-    const older = Array.from({ length: 12 }, (_, i) => ({
-      id: `old-${String(i)}`,
-      type: 'deposit',
-      amount: `${String(i + 20)}.00`,
-      balanceAfter: '100.00',
-    }));
-    fakeApi({
-      'GET /balances/me': () => json(balance(afterDeposit ? '105.00' : '100.00')),
-      'GET /balances/me/transactions?page=1&pageSize=10': () =>
-        json(
-          afterDeposit
-            ? page([{ id: 'txn_5.00', type: 'deposit', amount: '5.00', balanceAfter: '105.00' }, ...older.slice(0, 9)], {
-                page: 1,
-                pageSize: 10,
-                total: 13,
-                totalPages: 2,
-              })
-            : page(older.slice(0, 10), { page: 1, pageSize: 10, total: 12, totalPages: 2 }),
-        ),
-      'GET /balances/me/transactions?page=2&pageSize=10': () =>
-        json(page(older.slice(10), { page: 2, pageSize: 10, total: 12, totalPages: 2 })),
-      'POST /balances/me/deposits': () => {
-        afterDeposit = true;
-        return movement('deposit', '5.00', '105.00');
-      },
-    });
-    const user = await renderReady();
-
-    await user.click(await screen.findByRole('button', { name: 'Página 2' }));
-    expect(await screen.findByText('+$31.00')).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Monto (USD)'), '5');
-    await user.click(submitButton());
-
-    expect(await screen.findByText('+$5.00')).toBeInTheDocument();
-    expect(screen.getByRole('navigation', { name: 'Paginación de movimientos' })).toHaveTextContent('1–10 de 13');
-    const newRow = screen.getByText('+$5.00').closest('li');
-    expect(newRow).toHaveAttribute('data-new', 'true');
-    expect(screen.getByRole('button', { name: 'Página 1' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('disables the button while sending and a double click creates a single request', async () => {

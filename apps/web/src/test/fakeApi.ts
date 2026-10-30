@@ -62,18 +62,13 @@ export const balance = (amount: string) => ({ amount, currency: 'USD', updatedAt
 
 export const page = (
   data: { id: string; type: string; amount: string; balanceAfter: string }[],
-  pagination: { page: number; pageSize: number; total: number; totalPages: number } = {
-    page: 1,
-    pageSize: 10,
-    total: data.length,
-    totalPages: data.length === 0 ? 0 : 1,
-  },
+  pagination: { page: number; pageSize: number; total: number; totalPages: number },
 ) => ({
   data: data.map((tx) => ({ currency: 'USD', createdAt: '2026-10-29T12:00:00.000Z', ...tx })),
   pagination,
 });
 
-export const emptyPage = page([]);
+export const emptyPage = page([], { page: 1, pageSize: 10, total: 0, totalPages: 0 });
 
 /** A promise you resolve from the test, to hold a request "in flight". */
 export function deferred<T>() {

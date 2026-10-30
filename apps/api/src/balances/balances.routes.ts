@@ -15,8 +15,7 @@ const movementSchema = z.object({
   currency: z.string(),
 });
 
-// Strict: unknown parameters get a clear 400 instead of being silently ignored.
-const pageSchema = z.strictObject({
+const pageSchema = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(10),
 });
