@@ -2,8 +2,6 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   BadgeCheck,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
   History,
   Inbox,
@@ -14,11 +12,12 @@ import { useState } from 'react';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { messageFor } from '../lib/errorMessages';
 import { formatDate, formatUsd } from '../lib/money';
+import type { PageSize } from '../lib/pagination';
 import type { TransactionPage, TransactionType } from '../lib/types';
 import { button, card, cardTitle, icon, skeleton, stateTitle } from '../ui/classes';
+import { Pagination } from './Pagination';
 
-// Matches the API default; 10 rows fill the desktop column without paginating too early.
-export const PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE: PageSize = 10;
 
 const TYPES: Record<TransactionType, { label: string; icon: LucideIcon }> = {
   deposit: { label: 'Depósito', icon: ArrowDownToLine },
@@ -35,6 +34,7 @@ interface Props {
 
 export function TransactionHistory({ refreshToken, highlightId }: Props) {
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
   const [seenRefresh, setSeenRefresh] = useState(refreshToken);
   if (seenRefresh !== refreshToken) {
     // Adjusting state during render (React's documented pattern) avoids a stale extra fetch.
@@ -43,11 +43,9 @@ export function TransactionHistory({ refreshToken, highlightId }: Props) {
   }
 
   const { data, error, loading, reload } = useApiQuery<TransactionPage>(
-    `/balances/me/transactions?page=${page}&pageSize=${PAGE_SIZE}`,
+    `/balances/me/transactions?page=${String(page)}&pageSize=${String(pageSize)}`,
     refreshToken,
   );
-
-  const totalPages = data?.pagination.totalPages ?? 0;
 
   function renderBody() {
     if (error) {
@@ -83,7 +81,7 @@ export function TransactionHistory({ refreshToken, highlightId }: Props) {
         </div>
       );
     }
-    // While the next page loads, the previous one stays visible but dimmed.
+    // While another page loads, the current one stays visible but dimmed.
     return (
       <ul className={`grid gap-1 transition-opacity duration-150 ${loading ? 'opacity-50' : ''}`}>
         {data.data.map((tx) => {
@@ -133,34 +131,19 @@ export function TransactionHistory({ refreshToken, highlightId }: Props) {
 
       {renderBody()}
 
-      {totalPages > 1 && (
-        <nav className="mt-4 flex items-center justify-between gap-2" aria-label="Paginación de movimientos">
-          <button
-            type="button"
-            className={button.compact}
-            onClick={() => {
-              setPage((p) => p - 1);
-            }}
-            disabled={page <= 1 || loading}
-          >
-            <ChevronLeft className={icon} aria-hidden="true" />
-            Anterior
-          </button>
-          <span className="text-sm" aria-live="polite">
-            Página {page} de {totalPages}
-          </span>
-          <button
-            type="button"
-            className={button.compact}
-            onClick={() => {
-              setPage((p) => p + 1);
-            }}
-            disabled={page >= totalPages || loading}
-          >
-            Siguiente
-            <ChevronRight className={icon} aria-hidden="true" />
-          </button>
-        </nav>
+      {!error && data && data.pagination.total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={data.pagination.total}
+          totalPages={data.pagination.totalPages}
+          disabled={loading}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
       )}
     </section>
   );
