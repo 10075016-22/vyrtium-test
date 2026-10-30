@@ -2,12 +2,29 @@
 
 Versión simplificada del servicio de saldo prepago (USD) de Orbita: una API en Node.js + TypeScript y una pantalla web en React que la consume.
 
+
+## Resumen
+
+Lo que protege el dinero, y dónde está en el código:
+
+| Garantía | Cómo | Dónde |
+|---|---|---|
+| Montos sin float | String → centavos enteros con regex, sin `Number` ni `parseFloat` | [`money.ts`](apps/api/src/balances/money.ts) |
+| El saldo nunca queda negativo, ni con concurrencia | `UPDATE ... WHERE amount_cents >= ?` + `CHECK (amount_cents >= 0)` en la base | [`balances.repository.ts`](apps/api/src/balances/balances.repository.ts), [`migrations.ts`](apps/api/src/db/migrations.ts) |
+| Saldo, movimiento y respuesta idempotente juntos | Una sola transacción `BEGIN IMMEDIATE` | [`idempotency.ts`](apps/api/src/idempotency/idempotency.ts) |
+| Idempotencia por usuario | Llave primaria `(user_id, key)` + hash de la petición; otro body con la misma llave → 422 | [`idempotency.ts`](apps/api/src/idempotency/idempotency.ts) |
+| Webhook auténtico y sin duplicados | HMAC-SHA256 sobre el body crudo con `timingSafeEqual`; `event_id` como llave primaria | [`signature.ts`](apps/api/src/webhooks/signature.ts), [`webhooks.service.ts`](apps/api/src/webhooks/webhooks.service.ts) |
+| El usuario sale solo del token | Middleware que ignora ids en headers, query y body | [`auth.middleware.ts`](apps/api/src/auth/auth.middleware.ts) |
+| Sin depósitos duplicados desde la pantalla | `Idempotency-Key` por intento, reutilizada al reintentar; doble clic bloqueado | [`MovementForm.tsx`](apps/web/src/components/MovementForm.tsx) |
+
+Cada garantía tiene pruebas de integración contra la API real (supertest), incluidas pruebas de concurrencia: [`balances.test.ts`](apps/api/test/balances.test.ts) y [`webhooks.test.ts`](apps/api/test/webhooks.test.ts).
+
 ## Estructura
 
 ```
 apps/
   api/   Express 5 + TypeScript + SQLite (better-sqlite3)
-  web/   React 19 + Vite + TypeScript
+  web/   React 19 + Vite + TypeScript + Tailwind CSS 4
 ```
 
 Monorepo con npm workspaces. El código está en inglés; la documentación, en español.
@@ -16,6 +33,27 @@ Monorepo con npm workspaces. El código está en inglés; la documentación, en 
 
 - Node.js 22 o superior (ver `.nvmrc`)
 - npm 10 o superior
+
+
+## Tecnologías 
+
+### Frontend
+
+- [Tailwind](https://tailwindcss.com/)
+- [Vite](https://vite.dev/)
+- [Vitest](https://vitest.dev/)
+- [Lucide](https://lucide.dev/)
+- [React](https://es.react.dev/)
+
+### Backend
+
+- [Express](https://expressjs.com/es/)
+- [Zod](https://zod.dev/)
+- [Cors](https://github.com/expressjs/cors)
+- [Vitest](https://vitest.dev/)
+- [Supertest](https://github.com/forwardemail/supertest)
+- [Better Sqlite3](https://github.com/WiseLibs/better-sqlite3)
+
 
 ## Cómo correr el proyecto
 
@@ -27,9 +65,18 @@ npm run dev
 ```
 
 - API: http://localhost:3000
-- Web: http://localhost:5173
+- Web: http://localhost:5173 (entra con cualquiera de los [usuarios de prueba](#usuarios-de-prueba))
 
 > `better-sqlite3` compila un binario nativo al instalarse. El `package.json` raíz lo autoriza en `allowScripts` (npm 11 bloquea los scripts de instalación por defecto).
+
+**Puertos ocupados.** La web usa el puerto 5173 de forma estricta: si está ocupado, `npm run dev` falla con `Port 5173 is in use` en lugar de moverse a otro puerto, porque la API solo acepta peticiones (CORS) desde ese origen. Para usar otros puertos:
+
+```bash
+PORT=3100 CORS_ORIGIN=http://localhost:5180 npm run dev -w apps/api
+VITE_API_URL=http://localhost:3100 npm run dev -w apps/web -- --port 5180
+```
+
+Para empezar con la base vacía, borra `apps/api/data/orbita.db`: se vuelve a crear con los usuarios de prueba al arrancar.
 
 ## Pruebas
 
@@ -65,6 +112,8 @@ La base se crea y se puebla sola al arrancar la API (`apps/api/data/orbita.db`).
 
 `u_123` es el usuario del ejemplo del webhook en el enunciado.
 
+La pantalla de login muestra a Ana y Luis como usuarios de prueba, con un botón "Usar" que completa el formulario. Son credenciales públicas de demostración: en un entorno real esa sección no existiría.
+
 ```bash
 curl -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
@@ -79,7 +128,8 @@ curl -X POST http://localhost:3000/auth/login \
 | `GET` | `/balances/me` | Bearer | Saldo actual; si no existe, se crea en `0.00` |
 | `POST` | `/balances/me/deposits` | Bearer + `Idempotency-Key` | `{ amount: "150.25", currency: "USD" }` → 201 con el movimiento y el saldo |
 | `POST` | `/balances/me/withdrawals` | Bearer + `Idempotency-Key` | Igual que el depósito; nunca deja el saldo negativo |
-| `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo |
+| `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo, con `total` y `totalPages` |
+| `POST` | `/webhooks/payment-gateway` | `X-Signature` (HMAC) | Evento de la pasarela; si está `approved`, acredita al `user_id` del evento |
 
 Los montos viajan siempre como **string** con hasta 2 decimales (`"150.25"`), tanto en las peticiones como en las respuestas. Un `amount` numérico en JSON se rechaza con 400.
 
@@ -92,6 +142,22 @@ curl -X POST http://localhost:3000/balances/me/deposits \
   -H 'Idempotency-Key: 6f1c2a9e-deposito-1' \
   -H 'Content-Type: application/json' \
   -d '{"amount":"150.25","currency":"USD"}'
+```
+
+Webhook firmado con el secreto de `apps/api/.env`:
+
+```bash
+SECRET=$(grep '^WEBHOOK_SECRET=' apps/api/.env | cut -d= -f2-)
+BODY='{"event_id":"evt_8f2a","user_id":"u_123","amount":"200.00","currency":"USD","status":"approved"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+curl -X POST http://localhost:3000/webhooks/payment-gateway \
+  -H 'Content-Type: application/json' -H "X-Signature: $SIG" -d "$BODY"
+```
+
+Respuesta del webhook (200 tanto para eventos nuevos como para duplicados y rechazados):
+
+```json
+{ "eventId": "evt_8f2a", "status": "approved", "credited": true, "duplicate": false, "transactionId": "txn_..." }
 ```
 
 ## Formato de errores
@@ -110,6 +176,8 @@ Todos los errores responden JSON con la misma forma; nunca se envía la traza al
 | `MISSING_TOKEN` | 401 | Falta el header `Authorization` |
 | `INVALID_TOKEN` | 401 | Token mal formado, con firma inválida o de un usuario que ya no existe |
 | `TOKEN_EXPIRED` | 401 | Token vencido |
+| `MISSING_SIGNATURE` | 401 | Webhook sin header `X-Signature` |
+| `INVALID_SIGNATURE` | 401 | La firma no corresponde al body recibido |
 | `IDEMPOTENCY_KEY_REQUIRED` | 400 | Depósito o retiro sin header `Idempotency-Key` |
 | `IDEMPOTENCY_KEY_INVALID` | 400 | Llave vacía, con espacios o de más de 255 caracteres |
 | `NOT_FOUND` | 404 | Ruta inexistente |
@@ -119,6 +187,8 @@ Todos los errores responden JSON con la misma forma; nunca se envía la traza al
 | `UNSUPPORTED_CURRENCY` | 422 | Moneda distinta de `USD` |
 | `INSUFFICIENT_FUNDS` | 422 | El retiro dejaría el saldo negativo |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | La llave ya se usó con otro body u otra operación |
+| `UNKNOWN_USER` | 422 | El `user_id` del webhook no existe |
+| `WEBHOOK_EVENT_CONFLICT` | 409 | El `event_id` ya llegó con otro contenido (monto, usuario o status) |
 | `INTERNAL_ERROR` | 500 | Error inesperado (el detalle queda solo en el log del servidor) |
 
 Regla general: **400** cuando la petición está mal formada (falta un campo, tipo incorrecto, header ausente) y **422** cuando está bien formada pero viola una regla de negocio.
@@ -156,10 +226,23 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Concurrencia con la misma llave:** la búsqueda de la llave, la operación y el guardado de la respuesta ocurren en una sola transacción `IMMEDIATE`, que toma el lock de escritura de SQLite al empezar. Una segunda petición con la misma llave espera y encuentra la respuesta ya guardada. Si el proceso cae a mitad de camino, todo se revierte junto: no existe una ventana donde el dinero se movió pero la llave no quedó registrada.
 - **Expiración:** las llaves expiran a las 24 horas (`IDEMPOTENCY_TTL_HOURS`). La llave vencida se borra al volver a usarla; en producción habría una limpieza periódica.
 
+### Webhook de la pasarela
+
+- **Firma sobre el body crudo.** La ruta lee el body como bytes (`express.raw`) y se monta antes de `express.json()`. El HMAC-SHA256 se calcula sobre esos bytes exactos: volver a serializar el JSON parseado cambiaría el espaciado o el orden de las llaves y rompería firmas válidas. La comparación usa `timingSafeEqual`, después de validar que la firma tenga 64 caracteres hexadecimales.
+- **La firma se verifica antes de leer el contenido:** un body sin firma válida responde 401 aunque además sea JSON inválido, sin dar pistas sobre su formato.
+- **Dedupe por `event_id` en la base.** `event_id` es la llave primaria de `webhook_events`, y el evento se registra con `INSERT ... ON CONFLICT DO NOTHING RETURNING`: la base decide si es la primera entrega, sin un paso previo de "leer y luego insertar". Registrar el evento, acreditar el saldo y crear el movimiento (`gateway_credit`) van en la misma transacción.
+- **Duplicados:** responden 200 con `duplicate: true` y el resultado original, para que la pasarela deje de reintentar.
+- **`rejected`:** se registra y responde 200 sin acreditar. Queda guardado, así que un `approved` posterior con el mismo `event_id` no puede convertirlo en un crédito.
+- **Mismo `event_id` con otro contenido:** 409 `WEBHOOK_EVENT_CONFLICT`, sin efectos. Una reentrega legítima trae el mismo contenido; uno distinto indica un problema en la integración y no debe resolverse en silencio.
+- **Usuario inexistente:** 422 `UNKNOWN_USER` y no se registra nada. No hay registro de usuarios, así que el evento no se puede aplicar.
+- **Montos:** aplican las mismas reglas que en depósitos (positivos, 2 decimales, máximo 10000.00, solo USD).
+
 ### Historial
 
-- Paginación por página (`page`, `pageSize` de 1 a 100, 10 por defecto) ordenada por una secuencia autoincremental, que es estable aunque dos movimientos tengan la misma fecha.
+- **Paginación por página** (`page` desde 1, `pageSize` de 1 a 100, 10 por defecto), ordenada por `seq`, una secuencia autoincremental que es estable aunque dos movimientos tengan la misma fecha. La respuesta incluye `total` y `totalPages`, que la pantalla necesita para mostrar los números de página.
+- `LIMIT/OFFSET` y `COUNT(*)` usan el índice `(user_id, seq DESC)`, así que solo recorren los movimientos de ese usuario.
 - Una página fuera de rango devuelve `data: []` con 200, no un error.
+- La consulta se valida de forma estricta: un parámetro desconocido responde 400 en lugar de ignorarse en silencio.
 
 ### Autenticación
 
@@ -169,16 +252,76 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - El middleware toma el usuario **solo del token** (`sub`) y verifica que siga existiendo. Las rutas protegidas no leen ningún id de usuario de headers, query ni body.
 - Los secretos (`JWT_SECRET`, `WEBHOOK_SECRET`) vienen solo de variables de entorno; la API no arranca si faltan.
 
+### Pantalla web
+
+- **Sin router ni librería de componentes.** Son dos pantallas, login y saldo, que cambian según haya sesión. Estilos con **Tailwind CSS 4**: la paleta, la curva de easing y las animaciones están definidas como tokens en `@theme` (`src/styles.css`), y las combinaciones repetidas (tarjeta, botones, inputs) viven en `src/ui/classes.ts`. Mobile-first, con dos columnas desde 768 px. Tema oscuro basado en la paleta de vyrtium.com e íconos de `lucide-react`.
+- **Transiciones** solo con `opacity` y `transform`, para que las resuelva la GPU sin recalcular el layout: los mensajes y los errores de campo entran con un fundido corto, el switch Depositar/Retirar desliza su indicador, el saldo hace un fundido cuando cambia y el movimiento recién creado entra deslizándose con un resaltado turquesa que se desvanece. Todas se desactivan con `prefers-reduced-motion`.
+- **Autocompletado desactivado en el login** (`autocomplete="off"`). Algunos navegadores igual ofrecen contraseñas guardadas desde su gestor, porque ignoran ese atributo en campos de contraseña.
+- **Token en `localStorage`**, junto con el email y la fecha de expiración, para que la sesión sobreviva a la recarga. El riesgo es que un XSS podría leerlo. La alternativa, una cookie `httpOnly`, evita eso pero obliga a agregar protección CSRF y a configurar CORS con credenciales. Con un token de 30 minutos, sin HTML de terceros y con React escapando todo el contenido, elegí la opción más simple y lo dejo anotado como mejora.
+- **401 vuelve al login con el motivo.** Todas las llamadas autenticadas pasan por un mismo `request` del contexto de autenticación. Ante cualquier 401 borra la sesión y muestra el motivo según el código de la API: "Tu sesión expiró" (`TOKEN_EXPIRED`) o "Tu sesión ya no es válida" (`INVALID_TOKEN`). Una sesión guardada que ya venció se descarta al cargar, sin llamar a la API.
+- **`Idempotency-Key` por intento.** La llave se genera con `crypto.randomUUID()` la primera vez que se envía una operación y queda asociada a esa operación (tipo + monto):
+  - Si falla la red o la API responde 5xx, el resultado es incierto: se conserva la llave y el reintento envía la misma, así que la API no duplica el movimiento.
+  - Si la operación termina (éxito o error de negocio como fondos insuficientes), o si el usuario cambia el monto o el tipo, el siguiente envío usa una llave nueva.
+- **Doble clic.** El botón se deshabilita mientras se envía, pero además un `ref` bloquea el segundo envío de forma síncrona: un doble clic rápido dispara dos eventos antes de que React vuelva a renderizar el botón deshabilitado.
+- **Máscara en el campo de monto.** Mientras se escribe solo se aceptan dígitos y un punto decimal, se descartan ceros a la izquierda y los miles se agrupan con coma (`1,234.50`). La máscara nunca cambia el monto que el usuario quiso escribir: un tercer decimal queda visible (`10.123`) para rechazarlo, en lugar de redondearlo en silencio a otro monto válido. Una coma escrita por el usuario se toma como punto decimal, porque es lo que muestra el teclado numérico en español; así `10,50` nunca se convierte en `1,050`. La parte entera admite hasta 5 dígitos, para que `10001` se pueda escribir y reciba el mensaje del máximo. El cursor se mantiene en el dígito editado cuando la máscara reagrupa los miles.
+- **Validación antes de enviar** con las mismas reglas que la API (positivo, máximo 2 decimales, hasta 10,000.00), sobre el valor sin la máscara. Un monto inválido (`0`, `10.123`, `10001`, letras) muestra el error junto al campo y no genera ninguna petición.
+- **Errores seguros se muestran mientras se escribe:** más de 2 decimales o más de 10,000.00 marcan el campo en rojo con su mensaje, que desaparece al corregir. Los demás (vacío, `0`) se muestran solo al enviar, porque mientras se escribe pueden ser estados intermedios, como `0.` antes de `0.50`.
+- **Estados:** placeholders mientras carga, error con botón "Reintentar" (por ejemplo, con la API apagada) y estado vacío para un usuario sin movimientos. Al cambiar de página, la lista actual se atenúa hasta que llegan los datos nuevos. Después de cada operación se recargan el saldo y el historial, que vuelve a la página 1 sin desmontarse.
+- **Paginación con números de página**: anterior y siguiente, la página actual y sus vecinas, y "…" cuando hay muchas; en pantallas angostas se muestran menos números para que el control quepa en una línea. Junto a ella, "41–50 de 96" y un selector de 5 o 10 movimientos por página. Usa el mismo control en forma de píldora que el switch Depositar/Retirar, y cada botón tiene un área táctil de unos 44 px aunque se vea más pequeño.
+- **Notificaciones con toasts (`sonner`)** para el resultado de cada operación, ubicadas donde no tapan contenido (abajo a la derecha en escritorio, abajo al centro en móvil): éxito con el nuevo saldo, o el error de negocio en lenguaje claro. Un resultado nuevo reemplaza al anterior en lugar de apilarse. Si falla la red o la API responde 5xx, el toast trae un botón **"Reintentar"** que vuelve a enviar el formulario con la misma `Idempotency-Key`. Los mensajes del login (credenciales inválidas, sesión expirada) y los errores de campo se quedan junto al formulario: explican por qué el usuario está ahí y no deben desaparecer solos.
+- **Accesibilidad:** todos los inputs tienen `<label>`, los errores están enlazados con `aria-describedby`, los toasts se anuncian en una región `aria-live`, el foco es visible, las áreas táctiles miden al menos 44 px y se respeta `prefers-reduced-motion`. En móvil, "Cerrar sesión" se muestra solo como ícono, con el texto disponible para lectores de pantalla.
+
 ## Qué dejé fuera y qué haría con más tiempo
 
-- **Paginación por cursor** (`?after=<seq>`) en lugar de por página: con offset, si llega un movimiento nuevo mientras el usuario navega, la página siguiente repite un elemento. Con el volumen de esta prueba, la paginación por página es más simple de usar desde la UI.
+- **Paginación por cursor (keyset)** en lugar de `OFFSET`: si llega un movimiento nuevo mientras el usuario navega, con `OFFSET` la página siguiente puede repetir un elemento, y con un cursor no. La descarté porque el cursor no conoce el total y la pantalla muestra números de página; además, el usuario vuelve a la página 1 después de cada operación propia. Si el historial creciera mucho o hubiera escrituras frecuentes de otros orígenes (como el webhook), cambiaría a cursor con "anterior/siguiente".
 - **Limpieza periódica de llaves de idempotencia vencidas.** Hoy solo se borra una llave vencida cuando se vuelve a usar.
 - **PostgreSQL** si la API corriera en varias instancias (ver "Persistencia").
+- **Preguntas para el contrato con la pasarela.** El payload no trae un id de pago, solo `event_id`, así que un `rejected` y luego un `approved` del mismo pago con `event_id` distintos se tratan como eventos independientes y el `approved` acredita. No inventé una regla para esto: hay que acordarla con la pasarela. Tampoco está definido qué hacer con un pago aprobado por más de 10000.00 USD; hoy se rechaza con 422 igual que un depósito.
+- **Protección contra replay en el webhook.** La firma no incluye un timestamp, así que un evento firmado capturado se podría reenviar. El dedupe por `event_id` impide que acredite dos veces, pero con un header de timestamp firmado se podrían rechazar los eventos viejos.
+- **Usuario inexistente en el webhook.** En producción, en lugar de rechazarlo, lo guardaría en una cola de conciliación manual: es dinero que la pasarela ya cobró.
+- **Token en cookie `httpOnly`** con protección CSRF, en lugar de `localStorage` (ver "Pantalla web").
+- **Pruebas end-to-end en CI** con Playwright contra la API real. Los flujos de la pantalla se verificaron manualmente con Playwright (390 px y escritorio, red lenta, doble clic, reintento tras fallo de red, token alterado, API apagada), pero las pruebas automáticas de la web simulan la API en la capa de `fetch`.
+
+## Forma de trabajo
+
+Cada parte se hizo en su propia rama y entró a `main` por pull request, con el CI (pruebas con cobertura, lint y typecheck) en verde:
+
+| PR | Rama | Contenido |
+|---|---|---|
+| #1 | `feat/configuracion-ci` | Monorepo, CI, ESLint con tipos, cobertura mínima del 90% y plantilla de PR |
+| #2 | `feat/db-auth` | SQLite con migraciones, seed, login con JWT y formato de errores |
+| #3 | `feat/balances` | Saldo, depósitos y retiros idempotentes, concurrencia e historial |
+| #5 | `feat/webhook` | Webhook con HMAC sobre el body crudo y dedupe por `event_id` |
+| #6 | `feat/web-implementation` | Pantallas de login y saldo |
+| #7 | `docs/readme-final` | Este README, la revisión final y la paginación con números de página |
+
+El orden fue por riesgo para el dinero: primero lo que puede corromper el saldo (API, idempotencia, concurrencia, webhook) y después la pantalla.
+
+Antes de entregar se clonó el repositorio en una carpeta limpia y se siguió solo este README (`npm install`, copiar los `.env`, `npm run dev`, `npm test`). Además se verificaron a mano, contra la API real, los casos borde: login con el mismo error para email y contraseña, token alterado y vencido (`JWT_TTL_SECONDS=2`), idempotencia con la misma llave y otro body o de otro usuario, montos inválidos y en el límite, precisión decimal, retiros concurrentes, la misma llave en paralelo, ids ajenos ignorados, paginación fuera de rango y todos los casos del webhook (válido, duplicado, firma inválida o ausente, `rejected`, otro espaciado, usuario inexistente). En la pantalla se revisaron con Playwright a 390 px y en escritorio: sesión, token alterado, montos inválidos sin petición, red lenta, doble clic, reintento tras fallo de red, API apagada, estado vacío y paginación.
 
 ## Tiempo dedicado
 
-_Pendiente._
+Aproximado **3 h 30 min**, entre las 22:30 y las 02:00 (hora de Colombia), según las horas de los commits:
+
+| Etapa | Tiempo aproximado |
+|---|---|
+| Análisis del enunciado y plan | 15 min |
+| Configuración del monorepo y CI | 20 min |
+| Base de datos, autenticación y errores | 15 min |
+| Saldo, depósitos, retiros e idempotencia | 15 min |
+| Webhook | 10 min |
+| Pantalla web, ajustes de diseño y pruebas | 1 h 05 min |
+| Revisión final y README | 45 min |
 
 ## Uso de IA
 
-_Pendiente._
+El proyecto se construyó trabajando con **Claude Code** (modelo Claude Opus 5.5) como asistente de programación, en modo agente dentro del editor.
+
+### ¿Qué hizo la IA? 
+
+Con este modelo se realiza analisis del enunciado principal y se evalua la mejor forma de poder validar y resolver el problema.
+
+
+- Se configura una serie de skills que permiten el mejor trabajo estableciendo reglas directas para no caer en loops ante situaciones un poco más complicadas, es decir, desde el inicio se configura para que el modelo y los agentes puedan actuar como unos expertos en el tema y tengan la capacidad de hacer mejor razonamiento frente a situaciones o implementaciones.
+
+- Se configura MCP de `Playwright` para poder ejecutar y hacer pruebas `e2e`, de esta forma, al hacer pruebas de implementaciones visuales en la web, el agente podrá tomar `screenshoots` de los pasos y tener un poco más de razonamiento y mejor toma de decisiones frente a problemas de ui que no concuerden con el objetivo inicial.

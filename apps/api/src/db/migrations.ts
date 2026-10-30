@@ -43,4 +43,18 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (user_id, key)
   ) STRICT;
   `,
+  // event_id as primary key is the dedupe: a redelivered event cannot be
+  // inserted twice, so it cannot be credited twice.
+  `
+  CREATE TABLE webhook_events (
+    event_id       TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL REFERENCES users (id),
+    status         TEXT NOT NULL CHECK (status IN ('approved', 'rejected')),
+    amount_cents   INTEGER NOT NULL CHECK (amount_cents > 0),
+    currency       TEXT NOT NULL CHECK (currency = 'USD'),
+    payload_hash   TEXT NOT NULL,
+    transaction_id TEXT UNIQUE REFERENCES transactions (id),
+    received_at    TEXT NOT NULL
+  ) STRICT;
+  `,
 ];

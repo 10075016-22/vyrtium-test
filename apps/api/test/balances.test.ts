@@ -334,8 +334,13 @@ describe('balances API', () => {
   });
 
   describe('GET /balances/me/transactions', () => {
-    function list(query = '') {
-      return request(ctx.app).get(`/balances/me/transactions${query}`).set('Authorization', `Bearer ${ctx.token}`);
+    interface Page {
+      data: { type: string; amount: string }[];
+      pagination: { page: number; pageSize: number; total: number; totalPages: number };
+    }
+
+    function list(query = '', token = ctx.token) {
+      return request(ctx.app).get(`/balances/me/transactions${query}`).set('Authorization', `Bearer ${token}`);
     }
 
     it('returns an empty first page for a user without movements', async () => {
@@ -351,18 +356,17 @@ describe('balances API', () => {
       }
       await move(ctx, 'withdrawals', '0.50', 'tw');
 
-      const res = await list('?page=1&pageSize=3');
-      const body = res.body as { data: { type: string; amount: string }[]; pagination: unknown };
-
-      expect(body.data.map((t) => `${t.type}:${t.amount}`)).toEqual([
+      const first = (await list('?page=1&pageSize=3')).body as Page;
+      expect(first.data.map((t) => `${t.type}:${t.amount}`)).toEqual([
         'withdrawal:0.50',
         'deposit:3.00',
         'deposit:2.00',
       ]);
-      expect(body.pagination).toEqual({ page: 1, pageSize: 3, total: 4, totalPages: 2 });
+      expect(first.pagination).toEqual({ page: 1, pageSize: 3, total: 4, totalPages: 2 });
 
-      const second = await list('?page=2&pageSize=3');
-      expect((second.body as { data: { amount: string }[] }).data.map((t) => t.amount)).toEqual(['1.00']);
+      const second = (await list('?page=2&pageSize=3')).body as Page;
+      expect(second.data.map((t) => t.amount)).toEqual(['1.00']);
+      expect(second.pagination).toEqual({ page: 2, pageSize: 3, total: 4, totalPages: 2 });
     });
 
     it('returns an empty list, not an error, for a page out of range (case 18)', async () => {
@@ -370,13 +374,15 @@ describe('balances API', () => {
       const res = await list('?page=99');
 
       expect(res.status).toBe(200);
-      expect((res.body as { data: unknown[] }).data).toEqual([]);
+      expect(res.body).toEqual({ data: [], pagination: { page: 99, pageSize: 10, total: 1, totalPages: 1 } });
     });
 
-    it('only lists the authenticated user transactions', async () => {
+    it('only lists and counts the authenticated user transactions', async () => {
       await move(ctx, 'deposits', '5.00', 'l1', ctx.luisToken);
-      const res = await list();
-      expect((res.body as { data: unknown[] }).data).toEqual([]);
+      const res = (await list()).body as Page;
+
+      expect(res.data).toEqual([]);
+      expect(res.pagination.total).toBe(0);
     });
 
     it.each(['?page=0', '?page=-1', '?page=abc', '?pageSize=0', '?pageSize=101', '?page=1.5'])(
@@ -387,5 +393,11 @@ describe('balances API', () => {
         expect(res.body).toMatchObject({ error: { code: 'VALIDATION_ERROR', message: 'Query parameters are invalid' } });
       },
     );
+
+    it('rejects unknown query parameters instead of silently ignoring them', async () => {
+      const res = await list('?page=1&size=5');
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ error: { code: 'VALIDATION_ERROR', details: [{ field: 'query' }] } });
+    });
   });
 });
