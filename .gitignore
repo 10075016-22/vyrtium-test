@@ -16,3 +16,4 @@ graft/
 .vscode/
 .idea/
 .ignore
+.agents/

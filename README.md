@@ -44,7 +44,7 @@ El reporte HTML de cobertura queda en `apps/*/coverage/index.html`.
 
 ## Integración continua
 
-En `.github/workflows/` hay dos workflows que corren en cada push a `main` y en cada pull request:
+En `.github/workflows/` hay dos workflows que corren en cada push y en cada pull request hacia `main` o `develop`:
 
 - **Tests:** pruebas de API y web en paralelo, con umbral de cobertura del 90% (líneas, ramas, funciones y sentencias).
 - **Lint:** ESLint (`strictTypeChecked` de typescript-eslint) y `tsc --noEmit`.
