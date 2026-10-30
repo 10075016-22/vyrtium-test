@@ -80,6 +80,7 @@ curl -X POST http://localhost:3000/auth/login \
 | `POST` | `/balances/me/deposits` | Bearer + `Idempotency-Key` | `{ amount: "150.25", currency: "USD" }` → 201 con el movimiento y el saldo |
 | `POST` | `/balances/me/withdrawals` | Bearer + `Idempotency-Key` | Igual que el depósito; nunca deja el saldo negativo |
 | `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo |
+| `POST` | `/webhooks/payment-gateway` | `X-Signature` (HMAC) | Evento de la pasarela; si está `approved`, acredita al `user_id` del evento |
 
 Los montos viajan siempre como **string** con hasta 2 decimales (`"150.25"`), tanto en las peticiones como en las respuestas. Un `amount` numérico en JSON se rechaza con 400.
 
@@ -92,6 +93,22 @@ curl -X POST http://localhost:3000/balances/me/deposits \
   -H 'Idempotency-Key: 6f1c2a9e-deposito-1' \
   -H 'Content-Type: application/json' \
   -d '{"amount":"150.25","currency":"USD"}'
+```
+
+Webhook firmado con el secreto de `apps/api/.env`:
+
+```bash
+SECRET=$(grep '^WEBHOOK_SECRET=' apps/api/.env | cut -d= -f2-)
+BODY='{"event_id":"evt_8f2a","user_id":"u_123","amount":"200.00","currency":"USD","status":"approved"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+curl -X POST http://localhost:3000/webhooks/payment-gateway \
+  -H 'Content-Type: application/json' -H "X-Signature: $SIG" -d "$BODY"
+```
+
+Respuesta del webhook (200 tanto para eventos nuevos como para duplicados y rechazados):
+
+```json
+{ "eventId": "evt_8f2a", "status": "approved", "credited": true, "duplicate": false, "transactionId": "txn_..." }
 ```
 
 ## Formato de errores
@@ -110,6 +127,8 @@ Todos los errores responden JSON con la misma forma; nunca se envía la traza al
 | `MISSING_TOKEN` | 401 | Falta el header `Authorization` |
 | `INVALID_TOKEN` | 401 | Token mal formado, con firma inválida o de un usuario que ya no existe |
 | `TOKEN_EXPIRED` | 401 | Token vencido |
+| `MISSING_SIGNATURE` | 401 | Webhook sin header `X-Signature` |
+| `INVALID_SIGNATURE` | 401 | La firma no corresponde al body recibido |
 | `IDEMPOTENCY_KEY_REQUIRED` | 400 | Depósito o retiro sin header `Idempotency-Key` |
 | `IDEMPOTENCY_KEY_INVALID` | 400 | Llave vacía, con espacios o de más de 255 caracteres |
 | `NOT_FOUND` | 404 | Ruta inexistente |
@@ -119,6 +138,8 @@ Todos los errores responden JSON con la misma forma; nunca se envía la traza al
 | `UNSUPPORTED_CURRENCY` | 422 | Moneda distinta de `USD` |
 | `INSUFFICIENT_FUNDS` | 422 | El retiro dejaría el saldo negativo |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | La llave ya se usó con otro body u otra operación |
+| `UNKNOWN_USER` | 422 | El `user_id` del webhook no existe |
+| `WEBHOOK_EVENT_CONFLICT` | 409 | El `event_id` ya llegó con otro contenido (monto, usuario o status) |
 | `INTERNAL_ERROR` | 500 | Error inesperado (el detalle queda solo en el log del servidor) |
 
 Regla general: **400** cuando la petición está mal formada (falta un campo, tipo incorrecto, header ausente) y **422** cuando está bien formada pero viola una regla de negocio.
@@ -156,6 +177,17 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Concurrencia con la misma llave:** la búsqueda de la llave, la operación y el guardado de la respuesta ocurren en una sola transacción `IMMEDIATE`, que toma el lock de escritura de SQLite al empezar. Una segunda petición con la misma llave espera y encuentra la respuesta ya guardada. Si el proceso cae a mitad de camino, todo se revierte junto: no existe una ventana donde el dinero se movió pero la llave no quedó registrada.
 - **Expiración:** las llaves expiran a las 24 horas (`IDEMPOTENCY_TTL_HOURS`). La llave vencida se borra al volver a usarla; en producción habría una limpieza periódica.
 
+### Webhook de la pasarela
+
+- **Firma sobre el body crudo.** La ruta lee el body como bytes (`express.raw`) y se monta antes de `express.json()`. El HMAC-SHA256 se calcula sobre esos bytes exactos: volver a serializar el JSON parseado cambiaría el espaciado o el orden de las llaves y rompería firmas válidas. La comparación usa `timingSafeEqual`, después de validar que la firma tenga 64 caracteres hexadecimales.
+- **La firma se verifica antes de leer el contenido:** un body sin firma válida responde 401 aunque además sea JSON inválido, sin dar pistas sobre su formato.
+- **Dedupe por `event_id` en la base.** `event_id` es la llave primaria de `webhook_events`, y el evento se registra con `INSERT ... ON CONFLICT DO NOTHING RETURNING`: la base decide si es la primera entrega, sin un paso previo de "leer y luego insertar". Registrar el evento, acreditar el saldo y crear el movimiento (`gateway_credit`) van en la misma transacción.
+- **Duplicados:** responden 200 con `duplicate: true` y el resultado original, para que la pasarela deje de reintentar.
+- **`rejected`:** se registra y responde 200 sin acreditar. Queda guardado, así que un `approved` posterior con el mismo `event_id` no puede convertirlo en un crédito.
+- **Mismo `event_id` con otro contenido:** 409 `WEBHOOK_EVENT_CONFLICT`, sin efectos. Una reentrega legítima trae el mismo contenido; uno distinto indica un problema en la integración y no debe resolverse en silencio.
+- **Usuario inexistente:** 422 `UNKNOWN_USER` y no se registra nada. No hay registro de usuarios, así que el evento no se puede aplicar.
+- **Montos:** aplican las mismas reglas que en depósitos (positivos, 2 decimales, máximo 10000.00, solo USD).
+
 ### Historial
 
 - Paginación por página (`page`, `pageSize` de 1 a 100, 10 por defecto) ordenada por una secuencia autoincremental, que es estable aunque dos movimientos tengan la misma fecha.
@@ -174,6 +206,9 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Paginación por cursor** (`?after=<seq>`) en lugar de por página: con offset, si llega un movimiento nuevo mientras el usuario navega, la página siguiente repite un elemento. Con el volumen de esta prueba, la paginación por página es más simple de usar desde la UI.
 - **Limpieza periódica de llaves de idempotencia vencidas.** Hoy solo se borra una llave vencida cuando se vuelve a usar.
 - **PostgreSQL** si la API corriera en varias instancias (ver "Persistencia").
+- **Preguntas para el contrato con la pasarela.** El payload no trae un id de pago, solo `event_id`, así que un `rejected` y luego un `approved` del mismo pago con `event_id` distintos se tratan como eventos independientes y el `approved` acredita. No inventé una regla para esto: hay que acordarla con la pasarela. Tampoco está definido qué hacer con un pago aprobado por más de 10000.00 USD; hoy se rechaza con 422 igual que un depósito.
+- **Protección contra replay en el webhook.** La firma no incluye un timestamp, así que un evento firmado capturado se podría reenviar. El dedupe por `event_id` impide que acredite dos veces, pero con un header de timestamp firmado se podrían rechazar los eventos viejos.
+- **Usuario inexistente en el webhook.** En producción, en lugar de rechazarlo, lo guardaría en una cola de conciliación manual: es dinero que la pasarela ya cobró.
 
 ## Tiempo dedicado
 
