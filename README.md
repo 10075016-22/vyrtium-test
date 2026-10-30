@@ -2,6 +2,7 @@
 
 Versión simplificada del servicio de saldo prepago (USD) de Orbita: una API en Node.js + TypeScript y una pantalla web en React que la consume.
 
+
 ## Resumen
 
 Lo que protege el dinero, y dónde está en el código:
@@ -32,6 +33,27 @@ Monorepo con npm workspaces. El código está en inglés; la documentación, en 
 
 - Node.js 22 o superior (ver `.nvmrc`)
 - npm 10 o superior
+
+
+## Tecnologías 
+
+### Frontend
+
+- [Tailwind](https://tailwindcss.com/)
+- [Vite](https://vite.dev/)
+- [Vitest](https://vitest.dev/)
+- [Lucide](https://lucide.dev/)
+- [React](https://es.react.dev/)
+
+### Backend
+
+- [Express](https://expressjs.com/es/)
+- [Zod](https://zod.dev/)
+- [Cors](https://github.com/expressjs/cors)
+- [Vitest](https://vitest.dev/)
+- [Supertest](https://github.com/forwardemail/supertest)
+- [Better Sqlite3](https://github.com/WiseLibs/better-sqlite3)
+
 
 ## Cómo correr el proyecto
 
@@ -271,7 +293,7 @@ Cada parte se hizo en su propia rama y entró a `main` por pull request, con el 
 | #3 | `feat/balances` | Saldo, depósitos y retiros idempotentes, concurrencia e historial |
 | #5 | `feat/webhook` | Webhook con HMAC sobre el body crudo y dedupe por `event_id` |
 | #6 | `feat/web-implementation` | Pantallas de login y saldo |
-| — | `docs/readme-final` | Este README, la revisión final y la paginación con números de página |
+| #7 | `docs/readme-final` | Este README, la revisión final y la paginación con números de página |
 
 El orden fue por riesgo para el dinero: primero lo que puede corromper el saldo (API, idempotencia, concurrencia, webhook) y después la pantalla.
 
@@ -279,7 +301,7 @@ Antes de entregar se clonó el repositorio en una carpeta limpia y se siguió so
 
 ## Tiempo dedicado
 
-Unas **2 h 45 min**, entre las 22:30 y las 01:35 (hora de Colombia), según las horas de los commits:
+Aproximado **3 h 30 min**, entre las 22:30 y las 02:00 (hora de Colombia), según las horas de los commits:
 
 | Etapa | Tiempo aproximado |
 |---|---|
