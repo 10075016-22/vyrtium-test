@@ -7,7 +7,7 @@ Versión simplificada del servicio de saldo prepago (USD) de Orbita: una API en 
 ```
 apps/
   api/   Express 5 + TypeScript + SQLite (better-sqlite3)
-  web/   React 19 + Vite + TypeScript
+  web/   React 19 + Vite + TypeScript + Tailwind CSS 4
 ```
 
 Monorepo con npm workspaces. El código está en inglés; la documentación, en español.
@@ -27,7 +27,7 @@ npm run dev
 ```
 
 - API: http://localhost:3000
-- Web: http://localhost:5173
+- Web: http://localhost:5173 (entra con cualquiera de los [usuarios de prueba](#usuarios-de-prueba))
 
 > `better-sqlite3` compila un binario nativo al instalarse. El `package.json` raíz lo autoriza en `allowScripts` (npm 11 bloquea los scripts de instalación por defecto).
 
@@ -64,6 +64,8 @@ La base se crea y se puebla sola al arrancar la API (`apps/api/data/orbita.db`).
 | `u_654` | `sofia@orbita.test` | `Orbita-Sofia-2026` |
 
 `u_123` es el usuario del ejemplo del webhook en el enunciado.
+
+La pantalla de login muestra a Ana y Luis como usuarios de prueba, con un botón "Usar" que completa el formulario. Son credenciales públicas de demostración: en un entorno real esa sección no existiría.
 
 ```bash
 curl -X POST http://localhost:3000/auth/login \
@@ -201,6 +203,25 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - El middleware toma el usuario **solo del token** (`sub`) y verifica que siga existiendo. Las rutas protegidas no leen ningún id de usuario de headers, query ni body.
 - Los secretos (`JWT_SECRET`, `WEBHOOK_SECRET`) vienen solo de variables de entorno; la API no arranca si faltan.
 
+### Pantalla web
+
+- **Sin router ni librería de componentes.** Son dos pantallas, login y saldo, que cambian según haya sesión. Estilos con **Tailwind CSS 4**: la paleta, la curva de easing y las animaciones están definidas como tokens en `@theme` (`src/styles.css`), y las combinaciones repetidas (tarjeta, botones, inputs) viven en `src/ui/classes.ts`. Mobile-first, con dos columnas desde 768 px. Tema oscuro basado en la paleta de vyrtium.com e íconos de `lucide-react`.
+- **Transiciones** solo con `opacity` y `transform`, para que las resuelva la GPU sin recalcular el layout: los mensajes y los errores de campo entran con un fundido corto, el switch Depositar/Retirar desliza su indicador, el saldo hace un fundido cuando cambia y el movimiento recién creado entra deslizándose con un resaltado turquesa que se desvanece. Todas se desactivan con `prefers-reduced-motion`.
+- **Autocompletado desactivado en el login** (`autocomplete="off"`). Algunos navegadores igual ofrecen contraseñas guardadas desde su gestor, porque ignoran ese atributo en campos de contraseña.
+- **Token en `localStorage`**, junto con el email y la fecha de expiración, para que la sesión sobreviva a la recarga. El riesgo es que un XSS podría leerlo. La alternativa, una cookie `httpOnly`, evita eso pero obliga a agregar protección CSRF y a configurar CORS con credenciales. Con un token de 30 minutos, sin HTML de terceros y con React escapando todo el contenido, elegí la opción más simple y lo dejo anotado como mejora.
+- **401 vuelve al login con el motivo.** Todas las llamadas autenticadas pasan por un mismo `request` del contexto de autenticación. Ante cualquier 401 borra la sesión y muestra el motivo según el código de la API: "Tu sesión expiró" (`TOKEN_EXPIRED`) o "Tu sesión ya no es válida" (`INVALID_TOKEN`). Una sesión guardada que ya venció se descarta al cargar, sin llamar a la API.
+- **`Idempotency-Key` por intento.** La llave se genera con `crypto.randomUUID()` la primera vez que se envía una operación y queda asociada a esa operación (tipo + monto):
+  - Si falla la red o la API responde 5xx, el resultado es incierto: se conserva la llave y el reintento envía la misma, así que la API no duplica el movimiento.
+  - Si la operación termina (éxito o error de negocio como fondos insuficientes), o si el usuario cambia el monto o el tipo, el siguiente envío usa una llave nueva.
+- **Doble clic.** El botón se deshabilita mientras se envía, pero además un `ref` bloquea el segundo envío de forma síncrona: un doble clic rápido dispara dos eventos antes de que React vuelva a renderizar el botón deshabilitado.
+- **Máscara en el campo de monto.** Mientras se escribe solo se aceptan dígitos y un punto decimal, no se puede escribir un tercer decimal, se descartan ceros a la izquierda y los miles se agrupan con coma (`1,234.50`). Una coma escrita por el usuario se toma como punto decimal, porque es lo que muestra el teclado numérico en español; así `10,50` nunca se convierte en `1,050`. La parte entera admite hasta 5 dígitos, para que `10001` se pueda escribir y reciba el mensaje del máximo. El cursor se mantiene en el dígito editado cuando la máscara reagrupa los miles.
+- **Validación antes de enviar** con las mismas reglas que la API (positivo, máximo 2 decimales, hasta 10,000.00), sobre el valor sin la máscara. Un monto inválido muestra el error junto al campo y no genera ninguna petición.
+- **El límite se valida mientras se escribe:** al pasar de 10,000.00 el campo se marca en rojo y aparece el mensaje, que desaparece al corregir. Los demás errores (vacío, `0`) se muestran solo al enviar, porque mientras se escribe pueden ser estados intermedios, como `0.` antes de `0.50`.
+- **Estados:** placeholders mientras carga, error con botón "Reintentar" (por ejemplo, con la API apagada) y estado vacío para un usuario sin movimientos. Al cambiar de página, la lista anterior se atenúa hasta que llegan los datos nuevos. Después de cada operación se recargan el saldo y el historial, que vuelve a la página 1 sin desmontarse.
+- **Historial de 10 movimientos por página**, el mismo valor por defecto que la API: en escritorio la lista ocupa la altura de la columna del formulario y no pagina antes de tiempo.
+- **Notificaciones con toasts (`sonner`)** para el resultado de cada operación, ubicadas donde no tapan contenido (abajo a la derecha en escritorio, abajo al centro en móvil): éxito con el nuevo saldo, o el error de negocio en lenguaje claro. Un resultado nuevo reemplaza al anterior en lugar de apilarse. Si falla la red o la API responde 5xx, el toast trae un botón **"Reintentar"** que vuelve a enviar el formulario con la misma `Idempotency-Key`. Los mensajes del login (credenciales inválidas, sesión expirada) y los errores de campo se quedan junto al formulario: explican por qué el usuario está ahí y no deben desaparecer solos.
+- **Accesibilidad:** todos los inputs tienen `<label>`, los errores están enlazados con `aria-describedby`, los toasts se anuncian en una región `aria-live`, el foco es visible, las áreas táctiles miden al menos 44 px y se respeta `prefers-reduced-motion`. En móvil, "Cerrar sesión" se muestra solo como ícono, con el texto disponible para lectores de pantalla.
+
 ## Qué dejé fuera y qué haría con más tiempo
 
 - **Paginación por cursor** (`?after=<seq>`) en lugar de por página: con offset, si llega un movimiento nuevo mientras el usuario navega, la página siguiente repite un elemento. Con el volumen de esta prueba, la paginación por página es más simple de usar desde la UI.
@@ -209,6 +230,9 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Preguntas para el contrato con la pasarela.** El payload no trae un id de pago, solo `event_id`, así que un `rejected` y luego un `approved` del mismo pago con `event_id` distintos se tratan como eventos independientes y el `approved` acredita. No inventé una regla para esto: hay que acordarla con la pasarela. Tampoco está definido qué hacer con un pago aprobado por más de 10000.00 USD; hoy se rechaza con 422 igual que un depósito.
 - **Protección contra replay en el webhook.** La firma no incluye un timestamp, así que un evento firmado capturado se podría reenviar. El dedupe por `event_id` impide que acredite dos veces, pero con un header de timestamp firmado se podrían rechazar los eventos viejos.
 - **Usuario inexistente en el webhook.** En producción, en lugar de rechazarlo, lo guardaría en una cola de conciliación manual: es dinero que la pasarela ya cobró.
+- **Token en cookie `httpOnly`** con protección CSRF, en lugar de `localStorage` (ver "Pantalla web").
+- **Página del historial en la URL** (`?page=2`), para que se pueda compartir o recargar sin volver a la página 1.
+- **Pruebas end-to-end en CI** con Playwright contra la API real. Los flujos de la pantalla se verificaron manualmente con Playwright (390 px y escritorio, red lenta, doble clic, reintento tras fallo de red, token alterado, API apagada), pero las pruebas automáticas de la web simulan la API en la capa de `fetch`.
 
 ## Tiempo dedicado
 
