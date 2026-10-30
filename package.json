@@ -1,5 +1,5 @@
 {
-  "name": "orbita-balance",
+  "name": "orbita-vyrtium",
   "private": true,
   "version": "0.1.0",
   "description": "Orbita balance service: Express API + React web client",
@@ -14,10 +14,20 @@
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
-    "typecheck": "npm run typecheck --workspaces"
+    "typecheck": "npm run typecheck --workspaces",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test:coverage": "npm run test:coverage --workspaces"
   },
   "devDependencies": {
-    "concurrently": "^10.0.6"
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1"
   },
   "allowScripts": {
     "better-sqlite3@13.0.3": true,
