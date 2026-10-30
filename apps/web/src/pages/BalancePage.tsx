@@ -10,7 +10,7 @@ import type { Balance } from '../lib/types';
 import { button, icon } from '../ui/classes';
 
 export function BalancePage() {
-  const { session, logout } = useAuth();
+  const { user, logout } = useAuth();
   const balance = useApiQuery<Balance>('/balances/me');
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [newTransactionId, setNewTransactionId] = useState<string | null>(null);
@@ -26,7 +26,7 @@ export function BalancePage() {
       <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/9 bg-ink/75 px-4 py-3 backdrop-blur-md md:px-6">
         <Brand />
         <div className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 truncate text-sm text-muted">{session?.email}</span>
+          <span className="min-w-0 truncate text-sm text-muted">{user?.email}</span>
           <button
             type="button"
             className={button.ghost}

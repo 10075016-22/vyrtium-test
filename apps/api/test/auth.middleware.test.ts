@@ -11,10 +11,10 @@ async function setup() {
   const ctx = await createTestContext();
   const app = express();
   app.use(express.json());
-  app.get('/whoami', requireAuth(ctx.db, ctx.config.jwtSecret), (req, res) => {
+  app.get('/whoami', requireAuth(ctx.db, ctx.config), (req, res) => {
     res.json({ userId: getUserId(req) });
   });
-  app.post('/whoami', requireAuth(ctx.db, ctx.config.jwtSecret), (req, res) => {
+  app.post('/whoami', requireAuth(ctx.db, ctx.config), (req, res) => {
     res.json({ userId: getUserId(req) });
   });
   app.get('/unprotected', (req, res) => {
@@ -48,10 +48,10 @@ describe('requireAuth', () => {
     expect(res.body).toEqual({ userId: ANA.id });
   });
 
-  it('responds 401 MISSING_TOKEN without an Authorization header', async () => {
+  it('responds 401 MISSING_TOKEN without an Authorization header or session cookie', async () => {
     const res = await request(ctx.app).get('/whoami');
     expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: { code: 'MISSING_TOKEN', message: 'Authorization header is required' } });
+    expect(res.body).toEqual({ error: { code: 'MISSING_TOKEN', message: 'Authorization header or session cookie is required' } });
   });
 
   it.each([

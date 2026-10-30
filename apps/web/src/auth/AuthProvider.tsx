@@ -1,64 +1,68 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiError, apiRequest, type RequestOptions } from '../lib/api';
 import { messageFor } from '../lib/errorMessages';
-import type { LoginResponse } from '../lib/types';
-import { AuthContext, type AuthContextValue } from './context';
-import { clearSession, loadSession, saveSession, type Session } from './session';
+import { AuthContext, type AuthContextValue, type AuthStatus, type SessionUser } from './context';
 
 interface AuthState {
-  session: Session | null;
+  status: AuthStatus;
+  user: SessionUser | null;
   notice: string | null;
 }
 
-const EXPIRED_NOTICE = 'Tu sesión expiró. Inicia sesión de nuevo para continuar.';
-
-function initialState(): AuthState {
-  const stored = loadSession();
-  if (stored && stored.expiresAt <= Date.now()) {
-    clearSession();
-    return { session: null, notice: EXPIRED_NOTICE };
-  }
-  return { session: stored, notice: null };
+/** Only an expired or rejected session deserves an explanation; "no session yet" does not. */
+function noticeFor(error: unknown): string | null {
+  return error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')
+    ? messageFor(error)
+    : null;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>(initialState);
+  const [state, setState] = useState<AuthState>({ status: 'checking', user: null, notice: null });
+
+  // The token lives in an HttpOnly cookie this code cannot read, so the API says
+  // whether the session survived the reload and who it belongs to.
+  useEffect(() => {
+    const controller = new AbortController();
+    apiRequest<SessionUser>('/auth/me', { signal: controller.signal }).then(
+      (user) => {
+        setState({ status: 'signed-in', user, notice: null });
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) setState({ status: 'signed-out', user: null, notice: noticeFor(error) });
+      },
+    );
+    return () => {
+      controller.abort();
+    };
+  }, []);
 
   const logout = useCallback((notice?: string) => {
-    clearSession();
-    setState({ session: null, notice: notice ?? null });
+    setState({ status: 'signed-out', user: null, notice: notice ?? null });
+    // Only the server can delete an HttpOnly cookie. If this fails (API down), the
+    // cookie still expires with the token.
+    apiRequest('/auth/logout', { method: 'POST' }).catch(() => undefined);
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const response = await apiRequest<LoginResponse>('/auth/login', {
-      method: 'POST',
-      body: { email, password },
-    });
-    const session: Session = {
-      token: response.accessToken,
-      email,
-      expiresAt: Date.now() + response.expiresIn * 1000,
-    };
-    saveSession(session);
-    setState({ session, notice: null });
+    await apiRequest('/auth/login', { method: 'POST', body: { email, password } });
+    const user = await apiRequest<SessionUser>('/auth/me');
+    setState({ status: 'signed-in', user, notice: null });
   }, []);
 
-  const token = state.session?.token;
-
   const request = useCallback(
-    async <T,>(path: string, options: Omit<RequestOptions, 'token'> = {}): Promise<T> => {
+    async <T,>(path: string, options: RequestOptions = {}): Promise<T> => {
       try {
-        return await apiRequest<T>(path, { ...options, token });
+        return await apiRequest<T>(path, options);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) logout(messageFor(err));
         throw err;
       }
     },
-    [token, logout],
+    [logout],
   );
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session: state.session, notice: state.notice, login, logout, request }),
+    () => ({ ...state, login, logout, request }),
     [state, login, logout, request],
   );
 

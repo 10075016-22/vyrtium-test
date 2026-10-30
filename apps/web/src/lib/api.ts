@@ -19,7 +19,6 @@ export class ApiError extends Error {
 export interface RequestOptions {
   method?: 'GET' | 'POST';
   body?: unknown;
-  token?: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
 }
@@ -31,7 +30,6 @@ interface ErrorBody {
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (options.token) headers.Authorization = `Bearer ${options.token}`;
 
   let response: Response;
   try {
@@ -39,6 +37,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       method: options.method ?? 'GET',
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      // Sends the HttpOnly session cookie; the token itself is never visible to this code.
+      credentials: 'include',
       signal: options.signal,
     });
   } catch (err) {

@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'MISSING_TOKEN'
   | 'INVALID_TOKEN'
   | 'TOKEN_EXPIRED'
+  | 'CSRF_REJECTED'
   | 'NOT_FOUND'
   | 'PAYLOAD_TOO_LARGE'
   | 'INTERNAL_ERROR'

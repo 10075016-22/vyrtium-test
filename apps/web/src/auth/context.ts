@@ -1,15 +1,23 @@
 import { createContext } from 'react';
 import type { RequestOptions } from '../lib/api';
-import type { Session } from './session';
+
+export interface SessionUser {
+  id: string;
+  email: string;
+}
+
+/** `checking` while the app asks the API whether the session cookie is still valid. */
+export type AuthStatus = 'checking' | 'signed-in' | 'signed-out';
 
 export interface AuthContextValue {
-  session: Session | null;
+  status: AuthStatus;
+  user: SessionUser | null;
   /** Why the user was sent back to the login screen, if they were. */
   notice: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: (notice?: string) => void;
-  /** Authenticated request: adds the bearer token and ends the session on any 401. */
-  request: <T>(path: string, options?: Omit<RequestOptions, 'token'>) => Promise<T>;
+  /** Request sent with the session cookie; ends the session on any 401. */
+  request: <T>(path: string, options?: RequestOptions) => Promise<T>;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

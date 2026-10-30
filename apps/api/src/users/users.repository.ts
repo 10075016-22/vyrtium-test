@@ -12,6 +12,10 @@ export function findUserByEmail(db: Db, email: string): UserRecord | undefined {
   return db.prepare<[string], UserRecord>(`${SELECT_USER} WHERE email = ?`).get(email);
 }
 
+export function findUserById(db: Db, id: string): Pick<UserRecord, 'id' | 'email'> | undefined {
+  return db.prepare<[string], Pick<UserRecord, 'id' | 'email'>>('SELECT id, email FROM users WHERE id = ?').get(id);
+}
+
 export function userExists(db: Db, id: string): boolean {
   return db.prepare<[string], { found: number }>('SELECT 1 AS found FROM users WHERE id = ?').get(id) !== undefined;
 }

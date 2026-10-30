@@ -102,12 +102,16 @@ curl -X POST http://localhost:3000/auth/login \
 
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
-| `POST` | `/auth/login` | No | `{ email, password }` → `{ accessToken, tokenType, expiresIn }` |
+| `POST` | `/auth/login` | No | `{ email, password }` → `{ accessToken, tokenType, expiresIn }`; además fija la cookie de sesión |
+| `GET` | `/auth/me` | Bearer o cookie | `{ id, email }` del usuario de la sesión |
+| `POST` | `/auth/logout` | No | Borra la cookie de sesión (204) |
 | `GET` | `/balances/me` | Bearer | Saldo actual; si no existe, se crea en `0.00` |
 | `POST` | `/balances/me/deposits` | Bearer + `Idempotency-Key` | `{ amount: "150.25", currency: "USD" }` → 201 con el movimiento y el saldo |
 | `POST` | `/balances/me/withdrawals` | Bearer + `Idempotency-Key` | Igual que el depósito; nunca deja el saldo negativo |
 | `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo, con `total` y `totalPages` |
 | `POST` | `/webhooks/payment-gateway` | `X-Signature` (HMAC) | Evento de la pasarela; si está `approved`, acredita al `user_id` del evento |
+
+"Bearer" significa `Authorization: Bearer <token>`, como pide el enunciado. La pantalla web no usa ese header: se autentica con la cookie `HttpOnly` que fija el login (ver "Autenticación"). Las dos formas sirven en todos los endpoints protegidos.
 
 Los montos viajan siempre como **string** con hasta 2 decimales (`"150.25"`), tanto en las peticiones como en las respuestas. Un `amount` numérico en JSON se rechaza con 400.
 
@@ -151,9 +155,10 @@ Todos los errores responden JSON con la misma forma; nunca se envía la traza al
 | `VALIDATION_ERROR` | 400 | El body no cumple el esquema (`details` indica el campo) |
 | `INVALID_JSON` | 400 | El body no es JSON válido |
 | `INVALID_CREDENTIALS` | 401 | Email inexistente o contraseña incorrecta (mismo error en ambos casos) |
-| `MISSING_TOKEN` | 401 | Falta el header `Authorization` |
+| `MISSING_TOKEN` | 401 | No llegó ni el header `Authorization` ni la cookie de sesión |
 | `INVALID_TOKEN` | 401 | Token mal formado, con firma inválida o de un usuario que ya no existe |
 | `TOKEN_EXPIRED` | 401 | Token vencido |
+| `CSRF_REJECTED` | 403 | Escritura autenticada con la cookie desde un origen distinto al de la web |
 | `MISSING_SIGNATURE` | 401 | Webhook sin header `X-Signature` |
 | `INVALID_SIGNATURE` | 401 | La firma no corresponde al body recibido |
 | `IDEMPOTENCY_KEY_REQUIRED` | 400 | Depósito o retiro sin header `Idempotency-Key` |
@@ -227,7 +232,9 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Contraseñas con scrypt** (`node:crypto`, N=2^14, r=8, p=1, sal aleatoria de 16 bytes). No requiere dependencias nativas extra y el formato guardado (`scrypt$N$r$p$sal$hash`) permite subir el costo en el futuro sin invalidar los hashes existentes. La comparación usa `timingSafeEqual`.
 - **Mismo error y mismo costo** si el email no existe o la contraseña es incorrecta: cuando el email no existe se verifica contra un hash ficticio, para que el tiempo de respuesta no revele qué emails están registrados.
 - **JWT HS256 con expiración de 30 minutos** (configurable con `JWT_TTL_SECONDS`). Se eligió JWT porque la verificación no necesita estado ni una tabla de sesiones. La contrapartida es que no se puede revocar antes de que venza; por eso la duración es corta. El algoritmo se fija en la verificación para bloquear tokens `alg: none`.
-- El middleware toma el usuario **solo del token** (`sub`) y verifica que siga existiendo. Las rutas protegidas no leen ningún id de usuario de headers, query ni body.
+- El middleware toma el usuario **solo del token** (`sub`) y verifica que siga existiendo. El token llega en el header `Authorization: Bearer` (clientes de API, como pide el enunciado) o, si no hay header, en la cookie de sesión (la web). Las rutas protegidas no leen ningún id de usuario de headers, query ni body.
+- **Cookie de sesión `HttpOnly`.** El login devuelve el token en el body, como pide el enunciado, y además lo fija en la cookie `orbita_session` con `HttpOnly`, `SameSite=Strict`, `Path=/` y la misma duración que el token. `Secure` se activa con `COOKIE_SECURE=true` (producción con HTTPS); en `http://localhost` queda apagado. Como JavaScript no puede leer ni borrar esa cookie, hay dos endpoints de apoyo: `GET /auth/me` (saber al recargar si hay sesión y de quién) y `POST /auth/logout` (borrarla).
+- **Protección CSRF.** Una cookie la envía el navegador solo, así que una escritura autenticada con cookie podría venir de otro sitio. Hay dos defensas: `SameSite=Strict` impide que otros sitios la envíen, y además el middleware rechaza con 403 `CSRF_REJECTED` cualquier escritura con cookie cuyo `Origin` no sea el de la web (`CORS_ORIGIN`). Con el header `Bearer` no aplica, porque un navegador nunca lo agrega por su cuenta.
 - Los secretos (`JWT_SECRET`, `WEBHOOK_SECRET`) vienen solo de variables de entorno; la API no arranca si faltan.
 
 ### Pantalla web
@@ -235,8 +242,8 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Sin router ni librería de componentes.** Son dos pantallas, login y saldo, que cambian según haya sesión. Estilos con **Tailwind CSS 4**: la paleta, la curva de easing y las animaciones están definidas como tokens en `@theme` (`src/styles.css`), y las combinaciones repetidas (tarjeta, botones, inputs) viven en `src/ui/classes.ts`. Mobile-first, con dos columnas desde 768 px. Tema oscuro basado en la paleta de vyrtium.com e íconos de `lucide-react`.
 - **Transiciones** solo con `opacity` y `transform`, para que las resuelva la GPU sin recalcular el layout: los mensajes y los errores de campo entran con un fundido corto, el switch Depositar/Retirar desliza su indicador, el saldo hace un fundido cuando cambia y el movimiento recién creado entra deslizándose con un resaltado turquesa que se desvanece. Todas se desactivan con `prefers-reduced-motion`.
 - **Autocompletado desactivado en el login** (`autocomplete="off"`). Algunos navegadores igual ofrecen contraseñas guardadas desde su gestor, porque ignoran ese atributo en campos de contraseña.
-- **Token en `localStorage`**, junto con el email y la fecha de expiración, para que la sesión sobreviva a la recarga. El riesgo es que un XSS podría leerlo. La alternativa, una cookie `httpOnly`, evita eso pero obliga a agregar protección CSRF y a configurar CORS con credenciales. Con un token de 30 minutos, sin HTML de terceros y con React escapando todo el contenido, elegí la opción más simple y lo dejo anotado como mejora.
-- **401 vuelve al login con el motivo.** Todas las llamadas autenticadas pasan por un mismo `request` del contexto de autenticación. Ante cualquier 401 borra la sesión y muestra el motivo según el código de la API: "Tu sesión expiró" (`TOKEN_EXPIRED`) o "Tu sesión ya no es válida" (`INVALID_TOKEN`). Una sesión guardada que ya venció se descarta al cargar, sin llamar a la API.
+- **La sesión vive en una cookie `HttpOnly`**, no en `localStorage`: el código de la página nunca ve el token, así que un XSS no podría robarlo. `fetch` se hace con `credentials: 'include'` y la API permite credenciales solo desde `CORS_ORIGIN`. Al cargar, la pantalla consulta `GET /auth/me` (mientras tanto muestra "Verificando tu sesión…"); si la cookie venció o fue alterada, muestra el login con el motivo. Cerrar sesión llama a `POST /auth/logout`, porque solo el servidor puede borrar una cookie `HttpOnly`.
+- **401 vuelve al login con el motivo.** Todas las llamadas autenticadas pasan por un mismo `request` del contexto de autenticación. Ante cualquier 401 cierra la sesión (y le pide a la API borrar la cookie) y muestra el motivo según el código de la API: "Tu sesión expiró" (`TOKEN_EXPIRED`) o "Tu sesión ya no es válida" (`INVALID_TOKEN`).
 - **`Idempotency-Key` por intento.** La llave se genera con `crypto.randomUUID()` la primera vez que se envía una operación y queda asociada a esa operación (tipo + monto):
   - Si falla la red o la API responde 5xx, el resultado es incierto: se conserva la llave y el reintento envía la misma, así que la API no duplica el movimiento.
   - Si la operación termina (éxito o error de negocio como fondos insuficientes), o si el usuario cambia el monto o el tipo, el siguiente envío usa una llave nueva.
@@ -257,7 +264,7 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 - **Preguntas para el contrato con la pasarela.** El payload no trae un id de pago, solo `event_id`, así que un `rejected` y luego un `approved` del mismo pago con `event_id` distintos se tratan como eventos independientes y el `approved` acredita. No inventé una regla para esto: hay que acordarla con la pasarela. Tampoco está definido qué hacer con un pago aprobado por más de 10000.00 USD; hoy se rechaza con 422 igual que un depósito.
 - **Protección contra replay en el webhook.** La firma no incluye un timestamp, así que un evento firmado capturado se podría reenviar. El dedupe por `event_id` impide que acredite dos veces, pero con un header de timestamp firmado se podrían rechazar los eventos viejos.
 - **Usuario inexistente en el webhook.** En producción, en lugar de rechazarlo, lo guardaría en una cola de conciliación manual: es dinero que la pasarela ya cobró.
-- **Token en cookie `httpOnly`** con protección CSRF, en lugar de `localStorage` (ver "Pantalla web").
+- **Revocación de sesiones.** El JWT no se puede invalidar antes de que venza: cerrar sesión borra la cookie, pero un token copiado antes seguiría sirviendo hasta su expiración (30 minutos). Con más tiempo agregaría una lista de revocación (por `jti`) o tokens de acceso más cortos con refresh token rotativo.
 - **Pruebas end-to-end en CI** con Playwright contra la API real. Los flujos de la pantalla se verificaron manualmente con Playwright (390 px y escritorio, red lenta, doble clic, reintento tras fallo de red, token alterado, API apagada), pero las pruebas automáticas de la web simulan la API en la capa de `fetch`.
 
 ## Forma de trabajo
