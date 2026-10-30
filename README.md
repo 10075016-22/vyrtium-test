@@ -34,9 +34,22 @@ npm run dev
 ## Pruebas
 
 ```bash
-npm test            # API y web
-npm run typecheck   # chequeo de tipos de ambos proyectos
+npm test                # pruebas de API y web
+npm run test:coverage   # pruebas con cobertura (falla si baja del 90%)
+npm run lint            # ESLint con reglas basadas en tipos
+npm run typecheck       # chequeo de tipos de ambos proyectos
 ```
+
+El reporte HTML de cobertura queda en `apps/*/coverage/index.html`.
+
+## Integración continua
+
+En `.github/workflows/` hay dos workflows que corren en cada push y en cada pull request hacia `main` o `develop`:
+
+- **Tests:** pruebas de API y web en paralelo, con umbral de cobertura del 90% (líneas, ramas, funciones y sentencias).
+- **Lint:** ESLint (`strictTypeChecked` de typescript-eslint) y `tsc --noEmit`.
+
+> TypeScript está fijado en 6.0.x porque typescript-eslint todavía no soporta TypeScript 7.
 
 ## Usuarios de prueba
 

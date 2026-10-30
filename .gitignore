@@ -15,3 +15,6 @@ graft/
 .DS_Store
 .vscode/
 .idea/
+.ignore
+.agents/
+skills-lock.json
