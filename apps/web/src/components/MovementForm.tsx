@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../auth/useAuth';
 import { ApiError } from '../lib/api';
 import { messageFor } from '../lib/errorMessages';
-import { formatUsd, unmaskAmount, validateAmount } from '../lib/money';
+import { formatUsd, LIVE_AMOUNT_ERRORS, unmaskAmount, validateAmount } from '../lib/money';
 import type { MovementResponse } from '../lib/types';
 import { button, card, cardTitle, field, fieldError as fieldErrorClass, fieldHelp, icon, input, label } from '../ui/classes';
 import { AmountInput } from './AmountInput';
@@ -163,10 +163,10 @@ export function MovementForm({ onCompleted }: { onCompleted: (transactionId: str
               value={amount}
               onValueChange={(masked) => {
                 setAmount(masked);
-                // Over the limit is a definite error, so it shows while typing. Other
-                // errors (empty, "0.") may be intermediate states and wait for submit.
+                // Too many decimals or over the limit are definite errors, shown while typing.
+                // Others (empty, "0.") may be intermediate states and wait for submit.
                 const live = validateAmount(unmaskAmount(masked));
-                setFieldError(!live.ok && live.reason === 'over-limit' ? live.message : null);
+                setFieldError(!live.ok && LIVE_AMOUNT_ERRORS.includes(live.reason) ? live.message : null);
               }}
               aria-invalid={fieldError ? true : undefined}
               aria-describedby={fieldError ? 'amount-error amount-help' : 'amount-help'}

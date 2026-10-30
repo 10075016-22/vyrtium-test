@@ -2,6 +2,22 @@
 
 Versión simplificada del servicio de saldo prepago (USD) de Orbita: una API en Node.js + TypeScript y una pantalla web en React que la consume.
 
+## Resumen
+
+Lo que protege el dinero, y dónde está en el código:
+
+| Garantía | Cómo | Dónde |
+|---|---|---|
+| Montos sin float | String → centavos enteros con regex, sin `Number` ni `parseFloat` | [`money.ts`](apps/api/src/balances/money.ts) |
+| El saldo nunca queda negativo, ni con concurrencia | `UPDATE ... WHERE amount_cents >= ?` + `CHECK (amount_cents >= 0)` en la base | [`balances.repository.ts`](apps/api/src/balances/balances.repository.ts), [`migrations.ts`](apps/api/src/db/migrations.ts) |
+| Saldo, movimiento y respuesta idempotente juntos | Una sola transacción `BEGIN IMMEDIATE` | [`idempotency.ts`](apps/api/src/idempotency/idempotency.ts) |
+| Idempotencia por usuario | Llave primaria `(user_id, key)` + hash de la petición; otro body con la misma llave → 422 | [`idempotency.ts`](apps/api/src/idempotency/idempotency.ts) |
+| Webhook auténtico y sin duplicados | HMAC-SHA256 sobre el body crudo con `timingSafeEqual`; `event_id` como llave primaria | [`signature.ts`](apps/api/src/webhooks/signature.ts), [`webhooks.service.ts`](apps/api/src/webhooks/webhooks.service.ts) |
+| El usuario sale solo del token | Middleware que ignora ids en headers, query y body | [`auth.middleware.ts`](apps/api/src/auth/auth.middleware.ts) |
+| Sin depósitos duplicados desde la pantalla | `Idempotency-Key` por intento, reutilizada al reintentar; doble clic bloqueado | [`MovementForm.tsx`](apps/web/src/components/MovementForm.tsx) |
+
+Cada garantía tiene pruebas de integración contra la API real (supertest), incluidas pruebas de concurrencia: [`balances.test.ts`](apps/api/test/balances.test.ts) y [`webhooks.test.ts`](apps/api/test/webhooks.test.ts).
+
 ## Estructura
 
 ```
@@ -30,6 +46,15 @@ npm run dev
 - Web: http://localhost:5173 (entra con cualquiera de los [usuarios de prueba](#usuarios-de-prueba))
 
 > `better-sqlite3` compila un binario nativo al instalarse. El `package.json` raíz lo autoriza en `allowScripts` (npm 11 bloquea los scripts de instalación por defecto).
+
+**Puertos ocupados.** La web usa el puerto 5173 de forma estricta: si está ocupado, `npm run dev` falla con `Port 5173 is in use` en lugar de moverse a otro puerto, porque la API solo acepta peticiones (CORS) desde ese origen. Para usar otros puertos:
+
+```bash
+PORT=3100 CORS_ORIGIN=http://localhost:5180 npm run dev -w apps/api
+VITE_API_URL=http://localhost:3100 npm run dev -w apps/web -- --port 5180
+```
+
+Para empezar con la base vacía, borra `apps/api/data/orbita.db`: se vuelve a crear con los usuarios de prueba al arrancar.
 
 ## Pruebas
 
@@ -81,7 +106,7 @@ curl -X POST http://localhost:3000/auth/login \
 | `GET` | `/balances/me` | Bearer | Saldo actual; si no existe, se crea en `0.00` |
 | `POST` | `/balances/me/deposits` | Bearer + `Idempotency-Key` | `{ amount: "150.25", currency: "USD" }` → 201 con el movimiento y el saldo |
 | `POST` | `/balances/me/withdrawals` | Bearer + `Idempotency-Key` | Igual que el depósito; nunca deja el saldo negativo |
-| `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo |
+| `GET` | `/balances/me/transactions?page=1&pageSize=10` | Bearer | Movimientos del más reciente al más antiguo, con `total` y `totalPages` |
 | `POST` | `/webhooks/payment-gateway` | `X-Signature` (HMAC) | Evento de la pasarela; si está `approved`, acredita al `user_id` del evento |
 
 Los montos viajan siempre como **string** con hasta 2 decimales (`"150.25"`), tanto en las peticiones como en las respuestas. Un `amount` numérico en JSON se rechaza con 400.
@@ -192,8 +217,10 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
 
 ### Historial
 
-- Paginación por página (`page`, `pageSize` de 1 a 100, 10 por defecto) ordenada por una secuencia autoincremental, que es estable aunque dos movimientos tengan la misma fecha.
+- **Paginación por página** (`page` desde 1, `pageSize` de 1 a 100, 10 por defecto), ordenada por `seq`, una secuencia autoincremental que es estable aunque dos movimientos tengan la misma fecha. La respuesta incluye `total` y `totalPages`, que la pantalla necesita para mostrar los números de página.
+- `LIMIT/OFFSET` y `COUNT(*)` usan el índice `(user_id, seq DESC)`, así que solo recorren los movimientos de ese usuario.
 - Una página fuera de rango devuelve `data: []` con 200, no un error.
+- La consulta se valida de forma estricta: un parámetro desconocido responde 400 en lugar de ignorarse en silencio.
 
 ### Autenticación
 
@@ -214,30 +241,69 @@ Los tres códigos de 401 permiten que la pantalla explique al usuario por qué v
   - Si falla la red o la API responde 5xx, el resultado es incierto: se conserva la llave y el reintento envía la misma, así que la API no duplica el movimiento.
   - Si la operación termina (éxito o error de negocio como fondos insuficientes), o si el usuario cambia el monto o el tipo, el siguiente envío usa una llave nueva.
 - **Doble clic.** El botón se deshabilita mientras se envía, pero además un `ref` bloquea el segundo envío de forma síncrona: un doble clic rápido dispara dos eventos antes de que React vuelva a renderizar el botón deshabilitado.
-- **Máscara en el campo de monto.** Mientras se escribe solo se aceptan dígitos y un punto decimal, no se puede escribir un tercer decimal, se descartan ceros a la izquierda y los miles se agrupan con coma (`1,234.50`). Una coma escrita por el usuario se toma como punto decimal, porque es lo que muestra el teclado numérico en español; así `10,50` nunca se convierte en `1,050`. La parte entera admite hasta 5 dígitos, para que `10001` se pueda escribir y reciba el mensaje del máximo. El cursor se mantiene en el dígito editado cuando la máscara reagrupa los miles.
-- **Validación antes de enviar** con las mismas reglas que la API (positivo, máximo 2 decimales, hasta 10,000.00), sobre el valor sin la máscara. Un monto inválido muestra el error junto al campo y no genera ninguna petición.
-- **El límite se valida mientras se escribe:** al pasar de 10,000.00 el campo se marca en rojo y aparece el mensaje, que desaparece al corregir. Los demás errores (vacío, `0`) se muestran solo al enviar, porque mientras se escribe pueden ser estados intermedios, como `0.` antes de `0.50`.
-- **Estados:** placeholders mientras carga, error con botón "Reintentar" (por ejemplo, con la API apagada) y estado vacío para un usuario sin movimientos. Al cambiar de página, la lista anterior se atenúa hasta que llegan los datos nuevos. Después de cada operación se recargan el saldo y el historial, que vuelve a la página 1 sin desmontarse.
-- **Historial de 10 movimientos por página**, el mismo valor por defecto que la API: en escritorio la lista ocupa la altura de la columna del formulario y no pagina antes de tiempo.
+- **Máscara en el campo de monto.** Mientras se escribe solo se aceptan dígitos y un punto decimal, se descartan ceros a la izquierda y los miles se agrupan con coma (`1,234.50`). La máscara nunca cambia el monto que el usuario quiso escribir: un tercer decimal queda visible (`10.123`) para rechazarlo, en lugar de redondearlo en silencio a otro monto válido. Una coma escrita por el usuario se toma como punto decimal, porque es lo que muestra el teclado numérico en español; así `10,50` nunca se convierte en `1,050`. La parte entera admite hasta 5 dígitos, para que `10001` se pueda escribir y reciba el mensaje del máximo. El cursor se mantiene en el dígito editado cuando la máscara reagrupa los miles.
+- **Validación antes de enviar** con las mismas reglas que la API (positivo, máximo 2 decimales, hasta 10,000.00), sobre el valor sin la máscara. Un monto inválido (`0`, `10.123`, `10001`, letras) muestra el error junto al campo y no genera ninguna petición.
+- **Errores seguros se muestran mientras se escribe:** más de 2 decimales o más de 10,000.00 marcan el campo en rojo con su mensaje, que desaparece al corregir. Los demás (vacío, `0`) se muestran solo al enviar, porque mientras se escribe pueden ser estados intermedios, como `0.` antes de `0.50`.
+- **Estados:** placeholders mientras carga, error con botón "Reintentar" (por ejemplo, con la API apagada) y estado vacío para un usuario sin movimientos. Al cambiar de página, la lista actual se atenúa hasta que llegan los datos nuevos. Después de cada operación se recargan el saldo y el historial, que vuelve a la página 1 sin desmontarse.
+- **Paginación con números de página**: anterior y siguiente, la página actual y sus vecinas, y "…" cuando hay muchas; en pantallas angostas se muestran menos números para que el control quepa en una línea. Junto a ella, "41–50 de 96" y un selector de 5 o 10 movimientos por página. Usa el mismo control en forma de píldora que el switch Depositar/Retirar, y cada botón tiene un área táctil de unos 44 px aunque se vea más pequeño.
 - **Notificaciones con toasts (`sonner`)** para el resultado de cada operación, ubicadas donde no tapan contenido (abajo a la derecha en escritorio, abajo al centro en móvil): éxito con el nuevo saldo, o el error de negocio en lenguaje claro. Un resultado nuevo reemplaza al anterior en lugar de apilarse. Si falla la red o la API responde 5xx, el toast trae un botón **"Reintentar"** que vuelve a enviar el formulario con la misma `Idempotency-Key`. Los mensajes del login (credenciales inválidas, sesión expirada) y los errores de campo se quedan junto al formulario: explican por qué el usuario está ahí y no deben desaparecer solos.
 - **Accesibilidad:** todos los inputs tienen `<label>`, los errores están enlazados con `aria-describedby`, los toasts se anuncian en una región `aria-live`, el foco es visible, las áreas táctiles miden al menos 44 px y se respeta `prefers-reduced-motion`. En móvil, "Cerrar sesión" se muestra solo como ícono, con el texto disponible para lectores de pantalla.
 
 ## Qué dejé fuera y qué haría con más tiempo
 
-- **Paginación por cursor** (`?after=<seq>`) en lugar de por página: con offset, si llega un movimiento nuevo mientras el usuario navega, la página siguiente repite un elemento. Con el volumen de esta prueba, la paginación por página es más simple de usar desde la UI.
+- **Paginación por cursor (keyset)** en lugar de `OFFSET`: si llega un movimiento nuevo mientras el usuario navega, con `OFFSET` la página siguiente puede repetir un elemento, y con un cursor no. La descarté porque el cursor no conoce el total y la pantalla muestra números de página; además, el usuario vuelve a la página 1 después de cada operación propia. Si el historial creciera mucho o hubiera escrituras frecuentes de otros orígenes (como el webhook), cambiaría a cursor con "anterior/siguiente".
 - **Limpieza periódica de llaves de idempotencia vencidas.** Hoy solo se borra una llave vencida cuando se vuelve a usar.
 - **PostgreSQL** si la API corriera en varias instancias (ver "Persistencia").
 - **Preguntas para el contrato con la pasarela.** El payload no trae un id de pago, solo `event_id`, así que un `rejected` y luego un `approved` del mismo pago con `event_id` distintos se tratan como eventos independientes y el `approved` acredita. No inventé una regla para esto: hay que acordarla con la pasarela. Tampoco está definido qué hacer con un pago aprobado por más de 10000.00 USD; hoy se rechaza con 422 igual que un depósito.
 - **Protección contra replay en el webhook.** La firma no incluye un timestamp, así que un evento firmado capturado se podría reenviar. El dedupe por `event_id` impide que acredite dos veces, pero con un header de timestamp firmado se podrían rechazar los eventos viejos.
 - **Usuario inexistente en el webhook.** En producción, en lugar de rechazarlo, lo guardaría en una cola de conciliación manual: es dinero que la pasarela ya cobró.
 - **Token en cookie `httpOnly`** con protección CSRF, en lugar de `localStorage` (ver "Pantalla web").
-- **Página del historial en la URL** (`?page=2`), para que se pueda compartir o recargar sin volver a la página 1.
 - **Pruebas end-to-end en CI** con Playwright contra la API real. Los flujos de la pantalla se verificaron manualmente con Playwright (390 px y escritorio, red lenta, doble clic, reintento tras fallo de red, token alterado, API apagada), pero las pruebas automáticas de la web simulan la API en la capa de `fetch`.
+
+## Forma de trabajo
+
+Cada parte se hizo en su propia rama y entró a `main` por pull request, con el CI (pruebas con cobertura, lint y typecheck) en verde:
+
+| PR | Rama | Contenido |
+|---|---|---|
+| #1 | `feat/configuracion-ci` | Monorepo, CI, ESLint con tipos, cobertura mínima del 90% y plantilla de PR |
+| #2 | `feat/db-auth` | SQLite con migraciones, seed, login con JWT y formato de errores |
+| #3 | `feat/balances` | Saldo, depósitos y retiros idempotentes, concurrencia e historial |
+| #5 | `feat/webhook` | Webhook con HMAC sobre el body crudo y dedupe por `event_id` |
+| #6 | `feat/web-implementation` | Pantallas de login y saldo |
+| — | `docs/readme-final` | Este README, la revisión final y la paginación con números de página |
+
+El orden fue por riesgo para el dinero: primero lo que puede corromper el saldo (API, idempotencia, concurrencia, webhook) y después la pantalla.
+
+Antes de entregar se clonó el repositorio en una carpeta limpia y se siguió solo este README (`npm install`, copiar los `.env`, `npm run dev`, `npm test`). Además se verificaron a mano, contra la API real, los casos borde: login con el mismo error para email y contraseña, token alterado y vencido (`JWT_TTL_SECONDS=2`), idempotencia con la misma llave y otro body o de otro usuario, montos inválidos y en el límite, precisión decimal, retiros concurrentes, la misma llave en paralelo, ids ajenos ignorados, paginación fuera de rango y todos los casos del webhook (válido, duplicado, firma inválida o ausente, `rejected`, otro espaciado, usuario inexistente). En la pantalla se revisaron con Playwright a 390 px y en escritorio: sesión, token alterado, montos inválidos sin petición, red lenta, doble clic, reintento tras fallo de red, API apagada, estado vacío y paginación.
 
 ## Tiempo dedicado
 
-_Pendiente._
+Unas **2 h 45 min**, entre las 22:30 y las 01:15 (hora de Colombia), según las horas de los commits:
+
+| Etapa | Tiempo aproximado |
+|---|---|
+| Análisis del enunciado y plan | 15 min |
+| Configuración del monorepo y CI | 20 min |
+| Base de datos, autenticación y errores | 15 min |
+| Saldo, depósitos, retiros e idempotencia | 15 min |
+| Webhook | 10 min |
+| Pantalla web, ajustes de diseño y pruebas | 1 h 05 min |
+| Revisión final y README | 25 min |
 
 ## Uso de IA
 
-_Pendiente._
+El proyecto se construyó trabajando con **Claude Code** (modelo Claude Opus 5.5) como asistente de programación, en modo agente dentro del editor.
+
+**Qué hizo la IA:** análisis del enunciado y propuesta del plan por riesgo; la mayor parte del código de la API, la web y las pruebas; la redacción inicial de este README y de las descripciones de las PR; y la verificación visual con Playwright (MCP) a 390 px y en escritorio.
+
+**Qué decidí y revisé yo:** los estándares del repositorio (código en inglés, documentación y commits en español, Conventional Commits, una rama y una PR por parte, CI con cobertura mínima del 90%), las decisiones de producto de la pantalla (usuarios de prueba en el login, máscara en el monto, validación en vivo, toasts, Tailwind, tema oscuro, 10 movimientos por página) y la revisión de cada PR antes de hacer merge. Los commits los hice yo.
+
+**Qué hubo que corregir** (lo encontrado en la revisión, no en la primera versión):
+
+- **Máscara del monto:** la primera versión recortaba `10.123` a `10.12` y enviaba ese depósito, un monto distinto al que el usuario escribió. Ahora el tercer decimal queda visible y se rechaza sin enviar nada.
+- **Hint del monto:** al escribir `22,300` el campo no avisaba nada hasta enviar. Ahora el límite se valida mientras se escribe.
+- **CI en rojo con todas las pruebas pasando:** sonner usa `setPointerCapture`, que no existe en jsdom; el error no capturado hacía terminar Vitest con código 1. La verificación inicial solo miraba el contador de pruebas y no el código de salida.
+- **CORS y puerto de Vite:** si el 5173 estaba ocupado, Vite se movía a otro puerto que la API rechazaba, y la pantalla solo mostraba "no pudimos conectar". Se corrigió con `strictPort`.
+- **Diseño:** scroll horizontal a 390 px por dos utilidades de padding en conflicto en el mismo botón; toasts que tapaban el header y el historial; paginación cada 5 movimientos dejando media pantalla vacía.
+- **Tooling:** npm resolvía TypeScript 7, que typescript-eslint no soporta (se fijó 6.0.x); y una línea del `.gitignore` sin salto de línea final unía dos reglas y anulaba ambas.

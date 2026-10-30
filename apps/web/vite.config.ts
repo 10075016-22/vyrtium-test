@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
+    // The API only allows CORS from this origin; falling back to another port
+    // would make every request fail, so fail fast with a clear message instead.
+    strictPort: true,
   },
   test: {
     environment: 'jsdom',
