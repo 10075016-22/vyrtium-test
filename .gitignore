@@ -17,3 +17,4 @@ graft/
 .idea/
 .ignore
 .agents/
+skills-lock.json
